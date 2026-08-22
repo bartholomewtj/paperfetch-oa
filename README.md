@@ -6,6 +6,8 @@ Resolver ladder: cache → Europe PMC → US PMC → Unpaywall → OpenAlex → 
 
 This is the public subset of a private tool. It only fetches copies that are already open. It does not log in anywhere, does not keep a library pickup list, and does not ingest files you downloaded by hand.
 
+Private `paperfetch` is **upstream**. Shared ladder/resolver/cache/title-lookup changes must land in both repos in the same session. Prefer implementing there first, then copy the OA-safe part here. Do not add CKN / `miss` / `ingest`. Missing OA is `no_oa` here, `queued_ckn` in private — do not rename either without updating articlegenerator.
+
 Do not install this next to the private `paperfetch` package. Both expose the `papers` command and the `papers` Python package. This one is for a public host (or a machine that only needs OA).
 
 ## Install
@@ -34,7 +36,7 @@ Optional: set `CORE_API_KEY` to add [CORE](https://core.ac.uk/services/api) as t
 
 ```
 papers get 10.1371/journal.pone.0000308
-papers get "A mutation in the VPS33A gene"
+papers get "Sharing detailed research data is associated with increased citation rate"
 papers status
 ```
 
@@ -52,7 +54,9 @@ Statuses:
 | `retry` | Unpaywall API unreachable and nothing else hit. Try later. |
 | `no_doi` | Title did not resolve to a DOI. |
 
-Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download moves on to the next resolver rather than stopping.
+Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download or a PDF with no extractable text moves on to the next location, then the next resolver, rather than stopping.
+
+Title lookup skips Crossref `posted-content` (preprints, Nature Precedings) and reviewer reports, and prefers a `journal-article`. Give a DOI when you have one — titles are fuzzy.
 
 `papers status` prints one JSON object, exits 0, touches no network:
 
