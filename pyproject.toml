@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperfetch-oa"
+version = "0.1.0"
+description = "Legal open-access PDF + text for a DOI or title."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "pypdf>=5",
+]
+
+[project.scripts]
+papers = "papers.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bartholomewtj/paperfetch-oa"
+
+[tool.setuptools]
+packages = ["papers"]

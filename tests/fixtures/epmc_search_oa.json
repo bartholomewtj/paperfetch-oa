@@ -1,0 +1,51 @@
+{
+  "version": "6.9",
+  "hitCount": 1,
+  "resultList": {
+    "result": [
+      {
+        "id": "1762313",
+        "source": "MED",
+        "pmid": "17183658",
+        "pmcid": "PMC1762313",
+        "doi": "10.1371/journal.pone.0000308",
+        "title": "A mutation in the VPS33A gene causes an inherited metabolic disease in dogs.",
+        "authorString": "Drögemüller C, Becker D, Drögemüller M, Rossi M, et al.",
+        "journalTitle": "PLoS One",
+        "issue": "1",
+        "journalVolume": "1",
+        "pubYear": "2006",
+        "journalInfo": {
+          "journal": {
+            "title": "PLoS One",
+            "medlineAbbreviation": "PLoS One",
+            "essn": "1932-6203",
+            "isoabbreviation": "PLoS ONE"
+          }
+        },
+        "pubType": ["research-article", "Journal Article"],
+        "isOpenAccess": "Y",
+        "inEPMC": "Y",
+        "license": "cc by",
+        "fullTextUrlList": {
+          "fullTextUrl": [
+            {
+              "availability": "Open access",
+              "availabilityCode": "OA",
+              "documentStyle": "html",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC1762313"
+            },
+            {
+              "availability": "Open access",
+              "availabilityCode": "OA",
+              "documentStyle": "pdf",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC1762313?pdf=render"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

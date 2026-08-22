@@ -1,0 +1,76 @@
+# paperfetch-oa
+
+Get a paper's **open-access** full text from a DOI or title.
+
+Resolver ladder: cache → Europe PMC → US PMC → Unpaywall → OpenAlex → Semantic Scholar → preprint shortcuts → CORE (with key).
+
+This is the public subset of a private tool. It only fetches copies that are already open. It does not log in anywhere, does not keep a library pickup list, and does not ingest files you downloaded by hand.
+
+Do not install this next to the private `paperfetch` package. Both expose the `papers` command and the `papers` Python package. This one is for a public host (or a machine that only needs OA).
+
+## Install
+
+```
+pip install git+https://github.com/bartholomewtj/paperfetch-oa.git
+```
+
+Or from a clone:
+
+```
+pip install -e .
+```
+
+Set `PAPERS_MAILTO` to your real email. Unpaywall, OpenAlex, and Crossref require it. Do not use a made-up address.
+
+```
+$env:PAPERS_MAILTO="you@your-domain"
+```
+
+Optional: set `SEMANTIC_SCHOLAR_API_KEY` for higher Semantic Scholar rate limits (keyless traffic 429s and is then skipped for the rest of the process; never commit keys).
+
+Optional: set `CORE_API_KEY` to add [CORE](https://core.ac.uk/services/api) as the last resolver. Register free at https://core.ac.uk/api-keys/register. Without a key CORE is skipped.
+
+## Commands
+
+```
+papers get 10.1371/journal.pone.0000308
+papers get "A mutation in the VPS33A gene"
+papers status
+```
+
+If `papers` is not on PATH, use `python -m papers`.
+
+`papers get` prints one JSON object on stdout. When given a title, it prints `resolved title -> {doi}` on stderr before running the ladder. Unknown title returns `{status: "no_doi", agent_next: "notify_human"}` and exits 1. Agents read `text.txt` (path in `read`), not the PDF.
+
+Statuses:
+
+| Status | Meaning |
+|---|---|
+| `ok` | Full text on disk. Read the file at `read`. |
+| `no_oa` | No open-access copy found. `tried` lists the resolvers. `unpaywall_blocked` means the publisher PDF refused a script. |
+| `unreadable_pdf` | Got a PDF, no extractable text (likely a scan). |
+| `retry` | Unpaywall API unreachable and nothing else hit. Try later. |
+| `no_doi` | Title did not resolve to a DOI. |
+
+Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download moves on to the next resolver rather than stopping.
+
+`papers status` prints one JSON object, exits 0, touches no network:
+
+- `cached`: count of cached papers (`text.txt` ≥ 500 chars) and total `chars`
+- `unreadable`: count of paper dirs with PDF but text under the floor
+- `cache_root`: cache directory
+- `mailto_set` / `s2_key_set` / `core_key_set`
+
+Cache lives in `%USERPROFILE%\.paperfetch` (or `~/.paperfetch`).
+
+## Tests
+
+```
+python -m pytest -q
+```
+
+Offline only. No network, no keys.
+
+## articlegen
+
+articlegen currently recognises a different missing-OA status from the private CLI. This package reports `no_oa`. Accept that name in articlegen before installing this on Render.

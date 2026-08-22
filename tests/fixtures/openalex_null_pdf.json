@@ -1,0 +1,12 @@
+{
+  "id": "https://openalex.org/W1234567890",
+  "doi": "https://doi.org/10.1001/jamapsychiatry.2018.1776",
+  "title": "Closed paper",
+  "display_name": "Closed paper",
+  "publication_year": 2018,
+  "best_oa_location": {
+    "pdf_url": null,
+    "version": null,
+    "license": null
+  }
+}

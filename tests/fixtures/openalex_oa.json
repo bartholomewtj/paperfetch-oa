@@ -1,0 +1,17 @@
+{
+  "id": "https://openalex.org/W1234567890",
+  "doi": "https://doi.org/10.1371/journal.pone.0000308",
+  "title": "A mutation in the VPS33A gene",
+  "display_name": "A mutation in the VPS33A gene",
+  "publication_year": 2007,
+  "primary_location": {
+    "source": {
+      "display_name": "PLoS ONE"
+    }
+  },
+  "best_oa_location": {
+    "pdf_url": "https://files.example.test/paper.pdf",
+    "version": "publishedVersion",
+    "license": "cc-by"
+  }
+}

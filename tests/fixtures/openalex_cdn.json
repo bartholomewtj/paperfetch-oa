@@ -1,0 +1,12 @@
+{
+  "id": "https://openalex.org/W1234567890",
+  "doi": "https://doi.org/10.1001/jamapsychiatry.2018.1776",
+  "title": "Paid CDN paper",
+  "display_name": "Paid CDN paper",
+  "publication_year": 2018,
+  "best_oa_location": {
+    "pdf_url": "https://content.openalex.org/works/W1234567890/pdf",
+    "version": "publishedVersion",
+    "license": "cc-by"
+  }
+}

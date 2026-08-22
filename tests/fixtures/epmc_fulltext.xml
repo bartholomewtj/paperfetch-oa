@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<article article-type="research-article" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <journal-meta>
+      <journal-title-group>
+        <journal-title>PLoS One</journal-title>
+      </journal-title-group>
+    </journal-meta>
+  </front>
+  <body>
+    <sec sec-type="intro">
+      <title>Introduction</title>
+      <p>EPMC_FULLTEXT_MARKER This is a comprehensive study describing gene sequencing and mutation analysis in canine models. We performed genome-wide association studies and targeted resequencing across multiple pedigrees.</p>
+      <p>The investigation demonstrated clear phenotypic concordance with homozygous recessive inheritance patterns. Further cellular assays confirmed impaired trafficking of vacuolar protein sorting complexes.</p>
+    </sec>
+    <sec sec-type="methods">
+      <title>Methods</title>
+      <p>Genomic DNA was extracted from whole blood samples using standard automated magnetic bead protocols. High-throughput sequencing libraries were prepared according to standard manufacturer guidelines and sequenced on an Illumina platform with paired-end 150bp reads.</p>
+    </sec>
+    <sec sec-type="acknowledgments">
+      <title>Acknowledgments</title>
+      <p>This section should be skipped by the parser because acknowledgments are back-matter.</p>
+    </sec>
+  </body>
+</article>

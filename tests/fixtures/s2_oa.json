@@ -1,0 +1,13 @@
+{
+  "paperId": "abcdef1234567890",
+  "title": "A mutation in the VPS33A gene",
+  "externalIds": {
+    "DOI": "10.1371/journal.pone.0000308",
+    "CorpusId": 12345
+  },
+  "openAccessPdf": {
+    "url": "https://files.example.test/paper.pdf",
+    "license": "CC-BY",
+    "status": "HYBRID"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "records": [
+    {
+      "pmcid": "PMC7102627",
+      "pmid": "32220312",
+      "doi": "10.1371/journal.pone.0000308",
+      "live": true,
+      "status": "ok",
+      "title": "USPMC fixture title",
+      "journal": "Cell",
+      "year": 2020
+    }
+  ]
+}
