@@ -231,9 +231,9 @@ def test_empty_text_pdf_is_not_ok(home, capsys, monkeypatch):
     code, out, _ = run(capsys, ["get", PLOS])
     rec = json.loads(out)
     assert code == 2
-    assert rec["status"] == "unreadable_pdf"
-    assert rec["text_chars"] < 500
-    assert pdf_path(PLOS).is_file()
+    assert rec["status"] == "no_oa"
+    assert any(x.startswith("unpaywall") for x in rec["tried"].split(","))
+    assert not pdf_path(PLOS).exists()
 
 
 def test_unpaywall_5xx_retry_no_queue(home, capsys, monkeypatch):
@@ -326,7 +326,7 @@ def test_redirect_loopback_get_falls_through_no_cache(home, capsys, monkeypatch)
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"].startswith("unpaywall_blocked")
+    assert rec["tried"].startswith("europepmc,unpaywall_blocked")
     assert not pdf_path(PLOS).exists()
     assert not (cache_root() / "cache").exists() or not any((cache_root() / "cache").iterdir())
 
@@ -400,7 +400,7 @@ def test_html_as_pdf_falls_through_to_queue(home, capsys, monkeypatch):
     code, out, _ = run(capsys, ["get", PLOS])
     rec = json.loads(out)
     assert rec["status"] == "no_oa"
-    assert rec["tried"].startswith("unpaywall_blocked")
+    assert rec["tried"].startswith("europepmc,unpaywall_blocked")
     assert not pdf_path(PLOS).exists()
 
 
@@ -425,6 +425,38 @@ def test_publisher_pdf_blocked_next_resolver_still_runs(home, capsys, monkeypatc
         from papers.cache import text_path
         from papers.extract import write_text
         write_text(pdf_path(doi), text_path(doi))
+        write_meta(doi, {"title": "T", "resolver": "openalex", "text_chars": 4000})
+        return "hit"
+
+    monkeypatch.setattr("papers.cli.openalex_resolve", oa_hit)
+    code, out, _ = run(capsys, ["get", PLOS])
+    rec = json.loads(out)
+    assert called == [PLOS]
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "openalex"
+
+
+def test_unpaywall_short_pdf_falls_through_to_openalex(home, capsys, monkeypatch):
+    """A PDF with no extractable text must not stop OpenAlex from being tried."""
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(
+            True, "https://files.example/scan.pdf", "T", "Nature", 2013, None, None
+        ),
+    )
+
+    def short_dl(url, dest, mailto):
+        write_pdf(dest, "")
+
+    monkeypatch.setattr("papers.cli.download_pdf", short_dl)
+    called = []
+
+    def oa_hit(doi, mailto):
+        called.append(doi)
+        write_pdf(pdf_path(doi), "full text " * 400)
+        from papers.extract import write_text as _wt
+        _wt(pdf_path(doi), text_path(doi))
         write_meta(doi, {"title": "T", "resolver": "openalex", "text_chars": 4000})
         return "hit"
 
@@ -601,7 +633,7 @@ def test_epmc_not_oa_falls_through_to_unpaywall(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
     assert not text_path(CLOSED).exists()
 
 
@@ -620,7 +652,7 @@ def test_epmc_not_inepmc_falls_through_to_unpaywall(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
 
 
 def test_epmc_5xx_falls_through_to_unpaywall(home, capsys, monkeypatch):
@@ -640,7 +672,7 @@ def test_epmc_5xx_falls_through_to_unpaywall(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
 
 
 def test_epmc_short_xml_falls_through_to_unpaywall(home, capsys, monkeypatch):
@@ -667,7 +699,7 @@ def test_epmc_short_xml_falls_through_to_unpaywall(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
     assert not text_path(PLOS).exists()
 
 
@@ -806,7 +838,7 @@ def test_openalex_null_pdf_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,openalex"
+    assert rec["tried"] == "europepmc,unpaywall,openalex"
     assert not pdf_path(CLOSED).exists()
 
 
@@ -830,7 +862,7 @@ def test_openalex_non_pdf_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,openalex"
+    assert rec["tried"] == "europepmc,unpaywall,openalex"
     assert not pdf_path(CLOSED).exists()
 
 
@@ -853,7 +885,87 @@ def test_openalex_cdn_url_never_fetched(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,openalex"
+    assert rec["tried"] == "europepmc,unpaywall,openalex"
+
+
+def test_openalex_cdn_falls_back_to_other_location(home, capsys, monkeypatch):
+    import papers.openalex
+
+    payload = {
+        "display_name": "Fallback paper",
+        "publication_year": 2007,
+        "primary_location": {"source": {"display_name": "PLoS ONE"}},
+        "best_oa_location": {
+            "pdf_url": "https://content.openalex.org/works/W1/pdf",
+            "version": "publishedVersion",
+            "license": "cc-by",
+        },
+        "locations": [
+            {
+                "pdf_url": "https://content.openalex.org/works/W1/pdf",
+                "version": "publishedVersion",
+            },
+            {
+                "pdf_url": "https://files.example.test/paper.pdf",
+                "version": "acceptedVersion",
+                "license": "cc-by",
+            },
+        ],
+    }
+    seen = []
+
+    def fake_download_pdf(url, dest, mailto):
+        seen.append(url)
+        if "content.openalex.org" in url:
+            raise AssertionError("CDN URL must never be fetched")
+        write_pdf(dest, "OpenAlex fallback readable paper content " * 30)
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: io.BytesIO(json.dumps(payload).encode()))
+    monkeypatch.setattr("papers.openalex.download_pdf", fake_download_pdf)
+    monkeypatch.setattr("papers.cli.openalex_resolve", papers.openalex.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Fallback paper", "PLoS ONE", 2007, None, None),
+    )
+
+    code, out, _ = run(capsys, ["get", PLOS])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "openalex"
+    assert rec["version"] == "acceptedVersion"
+    assert seen == ["https://files.example.test/paper.pdf"]
+
+
+def test_openalex_null_best_uses_locations_pdf(home, capsys, monkeypatch):
+    import papers.openalex
+
+    payload = {
+        "display_name": "Alt loc paper",
+        "best_oa_location": {"pdf_url": None},
+        "locations": [
+            {"pdf_url": None},
+            {"pdf_url": "https://files.example.test/alt.pdf", "version": "publishedVersion", "license": "cc-by"},
+        ],
+    }
+
+    def fake_download_pdf(url, dest, mailto):
+        assert url == "https://files.example.test/alt.pdf"
+        write_pdf(dest, "OpenAlex alt location readable paper content " * 30)
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: io.BytesIO(json.dumps(payload).encode()))
+    monkeypatch.setattr("papers.openalex.download_pdf", fake_download_pdf)
+    monkeypatch.setattr("papers.cli.openalex_resolve", papers.openalex.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Alt loc paper", "PLoS ONE", 2007, None, None),
+    )
+
+    code, out, _ = run(capsys, ["get", PLOS])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "openalex"
 
 
 def test_openalex_short_pdf_is_unreadable(home, capsys, monkeypatch):
@@ -933,27 +1045,28 @@ def test_medrxiv_preprint_fallback(home, capsys, monkeypatch):
     assert code == 0
     assert rec["status"] == "ok"
     assert rec["resolver"] == "preprint"
-    # bioRxiv is tried twice (Cloudflare 403 retry), then medRxiv once
-    assert len(urls_called) == 3
-    assert "biorxiv" in urls_called[0]
-    assert "biorxiv" in urls_called[1]
-    assert "medrxiv" in urls_called[2]
+    # bioRxiv once, then medRxiv — do not retry the wrong host first
+    assert urls_called == [
+        f"https://www.biorxiv.org/content/{doi}v1.full.pdf",
+        f"https://www.medrxiv.org/content/{doi}v1.full.pdf",
+    ]
 
 
-def test_preprint_retries_once_after_403(home, capsys, monkeypatch):
+def test_preprint_retries_once_after_both_hosts_fail(home, capsys, monkeypatch):
     import papers.preprints
 
     doi = "10.1101/2024.01.01.654321"
     calls = []
+    sleeps = []
 
     def fake_download_pdf(url, dest, mailto):
         calls.append(url)
-        if len(calls) == 1:
+        if len(calls) <= 2:
             raise FetchError("HTTP Error 403: Forbidden")
         write_pdf(dest, "medRxiv preprint readable content " * 30)
 
     monkeypatch.setattr("papers.preprints.download_pdf", fake_download_pdf)
-    monkeypatch.setattr("papers.preprints.time.sleep", lambda s: None)
+    monkeypatch.setattr("papers.preprints.time.sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
     monkeypatch.setattr(
         "papers.cli.lookup",
@@ -964,8 +1077,10 @@ def test_preprint_retries_once_after_403(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 0
     assert rec["status"] == "ok"
-    assert calls[0] == calls[1]  # same URL retried
-    assert len(calls) == 2
+    assert sleeps == [papers.preprints.RETRY_GAP_SEC]
+    assert len(calls) == 3
+    assert "biorxiv" in calls[0] and "medrxiv" in calls[1]
+    assert calls[2] == calls[0]
 
 
 def test_psyarxiv_preprint_ok(home, capsys, monkeypatch):
@@ -1056,7 +1171,7 @@ def test_biorxiv_prefix_without_digit_not_treated_as_biorxiv(home, capsys, monke
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
 
 
 def test_title_argument_crossref_hit(home, capsys, monkeypatch):
@@ -1093,6 +1208,81 @@ def test_title_argument_crossref_skips_peer_review(home, capsys, monkeypatch):
         lambda req, timeout=None: io.BytesIO(json.dumps(cr).encode()),
     )
     code, out, err = run(capsys, ["get", "A mutation in the VPS33A gene"])
+    assert code == 0
+    assert json.loads(out)["doi"] == PLOS
+
+
+def test_title_argument_crossref_prefers_journal_over_nature_precedings(home, capsys, monkeypatch):
+    """Crossref types Nature Precedings as journal-article and ranks it first."""
+    seed_ok(PLOS)
+    cr = {
+        "message": {
+            "items": [
+                {"DOI": "10.1038/npre.2007.361.1", "type": "journal-article",
+                 "title": ["Sharing detailed research data is associated with increased citation rate"],
+                 "container-title": ["Nature Precedings"]},
+                {"DOI": "10.1038/npre.2007.361", "type": "journal-article",
+                 "title": ["Sharing detailed research data is associated with increased citation rate"],
+                 "container-title": ["Nature Precedings"]},
+                {"DOI": PLOS, "type": "journal-article",
+                 "title": ["Sharing detailed research data is associated with increased citation rate"],
+                 "container-title": ["PLoS ONE"],
+                 "ISSN": ["1932-6203"]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        urllib.request, "urlopen",
+        lambda req, timeout=None: io.BytesIO(json.dumps(cr).encode()),
+    )
+    code, out, err = run(
+        capsys,
+        ["get", "Sharing detailed research data is associated with increased citation rate"],
+    )
+    assert code == 0
+    assert err.strip() == f"resolved title -> {PLOS}"
+    assert json.loads(out)["doi"] == PLOS
+
+
+def test_title_argument_crossref_skips_posted_content(home, capsys, monkeypatch):
+    """Nature Precedings / preprint records rank above the journal article."""
+    seed_ok(PLOS)
+    cr = {
+        "message": {
+            "items": [
+                {"DOI": "10.1038/npre.2007.361.1", "type": "posted-content",
+                 "title": ["Sharing detailed research data is associated with increased citation rate"]},
+                {"DOI": PLOS, "type": "journal-article",
+                 "title": ["Sharing detailed research data is associated with increased citation rate"]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        urllib.request, "urlopen",
+        lambda req, timeout=None: io.BytesIO(json.dumps(cr).encode()),
+    )
+    code, out, err = run(capsys, ["get", "Sharing detailed research data is associated with increased citation rate"])
+    assert code == 0
+    assert json.loads(out)["doi"] == PLOS
+
+
+def test_title_argument_crossref_prefers_journal_article(home, capsys, monkeypatch):
+    seed_ok(PLOS)
+    cr = {
+        "message": {
+            "items": [
+                {"DOI": "10.1000/chapter", "type": "book-chapter",
+                 "title": ["Something else entirely"]},
+                {"DOI": PLOS, "type": "journal-article",
+                 "title": ["Also not an exact match but it is the article"]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        urllib.request, "urlopen",
+        lambda req, timeout=None: io.BytesIO(json.dumps(cr).encode()),
+    )
+    code, out, _ = run(capsys, ["get", "not an exact title at all"])
     assert code == 0
     assert json.loads(out)["doi"] == PLOS
 
@@ -1152,13 +1342,13 @@ def test_not_oa_anywhere_full_tried_list(home, capsys, monkeypatch):
     assert code1 == 2
     rec1 = json.loads(out1)
     assert rec1["status"] == "no_oa"
-    assert rec1["tried"] == "unpaywall,openalex,preprint"
+    assert rec1["tried"] == "europepmc,unpaywall,openalex,preprint"
 
     code2, out2, _ = run(capsys, ["get", doi])
     assert code2 == 2
     rec2 = json.loads(out2)
     assert rec2["status"] == "no_oa"
-    assert rec2["tried"] == "unpaywall,openalex,preprint"
+    assert rec2["tried"] == "europepmc,unpaywall,openalex,preprint"
 
 
 def test_openalex_extraction_error_falls_through(home, capsys, monkeypatch):
@@ -1178,7 +1368,7 @@ def test_openalex_extraction_error_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,openalex"
+    assert rec["tried"] == "europepmc,unpaywall,openalex"
 
 
 def test_empty_psyarxiv_id_treated_as_preprint_miss(home, capsys, monkeypatch):
@@ -1195,7 +1385,7 @@ def test_empty_psyarxiv_id_treated_as_preprint_miss(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall"
+    assert rec["tried"] == "europepmc,unpaywall"
 
 
 def test_empty_arxiv_id_treated_as_preprint_miss(home, capsys, monkeypatch):
@@ -1212,7 +1402,7 @@ def test_empty_arxiv_id_treated_as_preprint_miss(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,preprint"
+    assert rec["tried"] == "europepmc,unpaywall,preprint"
 
 
 def test_crossref_malformed_json_list_returns_no_doi(home, capsys, monkeypatch):
@@ -1273,7 +1463,7 @@ def test_near_preprint_prefixes_skip_shortcut(home, capsys, monkeypatch):
         rec = json.loads(out)
         assert code == 2
         assert rec["status"] == "no_oa"
-        assert rec["tried"] == "unpaywall"
+        assert rec["tried"] == "europepmc,unpaywall"
 
 
 def _core_search(*results):
@@ -1424,7 +1614,7 @@ def test_semanticscholar_null_pdf_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,semanticscholar"
+    assert rec["tried"] == "europepmc,unpaywall,semanticscholar"
     assert not pdf_path(CLOSED).exists()
 
 
@@ -1448,7 +1638,7 @@ def test_semanticscholar_non_pdf_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert code == 2
     assert rec["status"] == "no_oa"
-    assert rec["tried"] == "unpaywall,semanticscholar"
+    assert rec["tried"] == "europepmc,unpaywall,semanticscholar"
     assert not pdf_path(CLOSED).exists()
 
 
@@ -1842,7 +2032,7 @@ def test_uspmc_idconv_no_pmcid_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert rec["status"] == "no_oa"
     assert "uspmc" in rec["tried"].split(",")
-    assert rec["tried"] == "uspmc,unpaywall"
+    assert rec["tried"] == "europepmc,uspmc,unpaywall"
     assert not pdf_path(CLOSED).exists()
     assert not text_path(CLOSED).exists()
 
@@ -1866,7 +2056,7 @@ def test_uspmc_idconv_http_500_falls_through(home, capsys, monkeypatch):
     rec = json.loads(out)
     assert rec["status"] == "no_oa"
     assert "uspmc" in rec["tried"].split(",")
-    assert rec["tried"] == "uspmc,unpaywall"
+    assert rec["tried"] == "europepmc,uspmc,unpaywall"
     assert not pdf_path(CLOSED).exists()
     assert not text_path(CLOSED).exists()
 

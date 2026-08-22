@@ -70,28 +70,44 @@ def resolve(doi: str, mailto: str) -> str | None:
     dest_pdf = pdf_path(doi)
     dest_txt = text_path(doi)
 
+    # One pass over every host first (bioRxiv then medRxiv). Retrying a 403
+    # on the wrong host before trying the other one burns Cloudflare budget
+    # and gets the right host blocked too.
+    result = _try_urls(doi, urls, dest_pdf, dest_txt, mailto, is_arxiv)
+    if result is not None:
+        return result
+    time.sleep(RETRY_GAP_SEC)
+    result = _try_urls(doi, urls, dest_pdf, dest_txt, mailto, is_arxiv)
+    return result if result is not None else "miss"
+
+
+def _drop(path) -> None:
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _try_urls(
+    doi: str,
+    urls: list[str],
+    dest_pdf,
+    dest_txt,
+    mailto: str,
+    is_arxiv: bool,
+) -> str | None:
+    """Try each URL once. Return 'hit'/'unreadable', or None if all failed."""
     for url in urls:
         if is_arxiv:
             _rate_limit_arxiv()
         try:
-            try:
-                download_pdf(url, dest_pdf, mailto)
-            except FetchError:
-                time.sleep(RETRY_GAP_SEC)
-                download_pdf(url, dest_pdf, mailto)
+            download_pdf(url, dest_pdf, mailto)
         except FetchError:
-            if dest_pdf.exists():
-                try:
-                    dest_pdf.unlink()
-                except OSError:
-                    pass
+            _drop(dest_pdf)
             continue
         except Exception:
-            if dest_pdf.exists():
-                try:
-                    dest_pdf.unlink()
-                except OSError:
-                    pass
+            _drop(dest_pdf)
             continue
 
         try:
@@ -110,11 +126,6 @@ def resolve(doi: str, mailto: str) -> str | None:
                 return "hit"
             return "unreadable"
         except Exception:
-            if dest_pdf.exists():
-                try:
-                    dest_pdf.unlink()
-                except OSError:
-                    pass
+            _drop(dest_pdf)
             continue
-
-    return "miss"
+    return None

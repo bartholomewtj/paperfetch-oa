@@ -34,7 +34,7 @@ Optional: set `CORE_API_KEY` to add [CORE](https://core.ac.uk/services/api) as t
 
 ```
 papers get 10.1371/journal.pone.0000308
-papers get "A mutation in the VPS33A gene"
+papers get "Sharing detailed research data is associated with increased citation rate"
 papers status
 ```
 
@@ -52,7 +52,9 @@ Statuses:
 | `retry` | Unpaywall API unreachable and nothing else hit. Try later. |
 | `no_doi` | Title did not resolve to a DOI. |
 
-Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download moves on to the next resolver rather than stopping.
+Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download or a PDF with no extractable text moves on to the next location, then the next resolver, rather than stopping.
+
+Title lookup skips Crossref `posted-content` (preprints, Nature Precedings) and reviewer reports, and prefers a `journal-article`. Give a DOI when you have one — titles are fuzzy.
 
 `papers status` prints one JSON object, exits 0, touches no network:
 

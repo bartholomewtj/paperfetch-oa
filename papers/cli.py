@@ -12,6 +12,7 @@ from papers.cache import (
     cache_ok,
     cache_root,
     looks_like_doi,
+    meta_path,
     normalize_doi,
     pdf_path,
     read_meta,
@@ -118,8 +119,10 @@ def get_paper(raw: str) -> tuple[dict, int]:
         return _unreadable_record(doi, n, meta.get("title") or ""), 2
 
     mailto = _mailto()
+    tried: list[str] = []
     if europepmc_resolve(doi, mailto):
         return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
+    tried.append("europepmc")
 
     uspmc_res = uspmc_resolve(doi, mailto)
     if uspmc_res is True:
@@ -135,21 +138,25 @@ def get_paper(raw: str) -> tuple[dict, int]:
         unpaywall_error = True
 
     title = result.title if result else ""
-    tried: list[str] = []
     if uspmc_res is False:
         tried.append("uspmc")
     locations = list(result.locations) if result else []
     if result and result.pdf_url and not locations:
         locations = [(result.pdf_url, result.license, result.version)]
+
+    def _drop_unpaywall() -> None:
+        for p in (pdf, txt, meta_path(doi)):
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
     for url, lic, version in locations:
         try:
             download_pdf(url, pdf, mailto)
         except FetchError:
-            if pdf.exists():
-                try:
-                    pdf.unlink()
-                except OSError:
-                    pass
+            _drop_unpaywall()
             continue
         n = write_text(pdf, txt)
         write_meta(
@@ -166,7 +173,10 @@ def get_paper(raw: str) -> tuple[dict, int]:
         )
         if n >= TEXT_FLOOR:
             return _ok_record(doi, read_meta(doi), n), 0
-        return _unreadable_record(doi, n, title), 2
+        # Short extract: drop it and keep going (next Unpaywall URL, then
+        # OpenAlex / S2 / CORE). A scan should not hide a later readable copy.
+        _drop_unpaywall()
+        continue
     if not unpaywall_error:
         tried.append("unpaywall_blocked" if locations else "unpaywall")
 
