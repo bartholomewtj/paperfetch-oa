@@ -7,3 +7,12 @@ venv/
 uv.lock
 .env
 .paperfetch/
+
+# Factory stays on this machine; not on GitHub
+/adws/
+/specs/
+/requests/
+/app_docs/
+
+# Public-repo extras moved off GitHub
+/archive/
