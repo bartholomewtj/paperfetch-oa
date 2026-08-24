@@ -6,8 +6,6 @@ Resolver ladder: cache → Europe PMC → US PMC → Unpaywall → OpenAlex → 
 
 This is the public subset of a private tool. It only fetches copies that are already open. It does not log in anywhere, does not keep a library pickup list, and does not ingest files you downloaded by hand.
 
-Private `paperfetch` is **upstream**. Shared ladder/resolver/cache/title-lookup changes must land in both repos in the same session. Prefer implementing there first, then copy the OA-safe part here. Do not add CKN / `miss` / `ingest`. Missing OA is `no_oa` here, `queued_ckn` in private — do not rename either without updating articlegenerator.
-
 Do not install this next to the private `paperfetch` package. Both expose the `papers` command and the `papers` Python package. This one is for a public host (or a machine that only needs OA).
 
 ## Install
@@ -74,7 +72,3 @@ python -m pytest -q
 ```
 
 Offline only. No network, no keys.
-
-## articlegen
-
-articlegen currently recognises a different missing-OA status from the private CLI. This package reports `no_oa`. Accept that name in articlegen before installing this on Render.
