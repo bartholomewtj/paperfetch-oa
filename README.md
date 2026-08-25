@@ -2,7 +2,7 @@
 
 Get a paper's **open-access** full text from a DOI or title.
 
-Resolver ladder: cache → Europe PMC → US PMC → Unpaywall → OpenAlex → Semantic Scholar → preprint shortcuts → CORE (with key).
+Resolver ladder: cache → Europe PMC → US PMC → Unpaywall → OpenAlex → Semantic Scholar → preprint shortcuts → CORE (with key). US PMC also reads the article page itself when PMC has no downloadable PDF — that is how NIH author manuscripts (in PMC, but not in its open-access subset) come back as text.
 
 This is the public subset of a private tool. It only fetches copies that are already open. It does not log in anywhere, does not keep a library pickup list, and does not ingest files you downloaded by hand.
 

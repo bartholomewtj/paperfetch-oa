@@ -22,7 +22,7 @@ from papers.cache import (
     write_meta,
 )
 from papers.cli import main
-from papers.extract import extract_jats, extract_text, looks_like_pdf, write_jats_text
+from papers.extract import extract_html, extract_jats, extract_text, looks_like_pdf, write_jats_text
 from papers.fetch import FetchError, SafeRedirectHandler, UnsafeUrl, assert_url_safe, download_pdf
 from papers.unpaywall import Lookup, LookupError, lookup
 
@@ -2005,6 +2005,60 @@ def test_uspmc_direct_403_oa_fcgi_tgz_ok(home, capsys, monkeypatch):
         + list(cwd.glob("*.tgz"))
     )
     assert not leftovers
+
+def test_extract_html_keeps_abstract_and_body_only():
+    page = (FIXTURES / "pmc_article_manuscript.html").read_text(encoding="utf-8")
+    text = extract_html(page)
+    assert "Fifty-seven humans were fed a low choline diet" in text  # abstract
+    assert "18 of the 23 (78%) carriers" in text  # body
+    assert "rs7946" in text  # table cells
+    # dropped: page chrome, keywords, acknowledgments, references
+    for gone in ("official website", "Search in PMC", "Keywords:", "DK55865", "Zeisel SH. Choline", "Similar articles", "Vulnerability"):
+        assert gone not in text, gone
+    assert extract_html("<html><body><p>Sign in to view this article</p></body></html>") == ""
+    assert extract_html("") == ""
+
+
+def test_uspmc_author_manuscript_reads_article_html(home, capsys, monkeypatch):
+    """No PDF anywhere (direct link challenged, not in the OA bucket): the
+    resolver reads the PMC article page and writes text.txt without a PDF."""
+    import papers.uspmc
+
+    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
+
+    def boom(*a, **k):
+        raise AssertionError("network / unpaywall must not be called")
+
+    monkeypatch.setattr("papers.cli.lookup", boom)
+
+    def fake_fetch_bytes(url, mailto):
+        if "idconv" in url:
+            return (FIXTURES / "idconv_hit.json").read_bytes()
+        if url.startswith(papers.uspmc.AWS_BUCKET):
+            return b'<?xml version="1.0"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><KeyCount>0</KeyCount></ListBucketResult>'
+        if url == "https://pmc.ncbi.nlm.nih.gov/articles/PMC7102627/":
+            return (FIXTURES / "pmc_article_manuscript.html").read_bytes()
+        raise AssertionError(f"unexpected url: {url}")
+
+    def fake_download_pdf(url, dest, mailto):
+        raise FetchError("not a PDF")  # PMC's proof-of-work interstitial
+
+    monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr("papers.uspmc.download_pdf", fake_download_pdf)
+
+    code, out, _ = run(capsys, ["get", PLOS])
+    assert code == 0
+    rec = json.loads(out)
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "uspmc"
+    assert rec["text_chars"] >= 500
+    assert not pdf_path(PLOS).exists()
+    text = text_path(PLOS).read_text(encoding="utf-8")
+    assert "18 of the 23 (78%) carriers" in text
+    assert "Zeisel SH. Choline" not in text
+    meta = read_meta(PLOS)
+    assert meta["pmcid"] == "PMC7102627"
+    assert meta["version"] == "authorManuscript"
 
 
 def test_uspmc_idconv_no_pmcid_falls_through(home, capsys, monkeypatch):

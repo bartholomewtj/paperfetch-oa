@@ -11,7 +11,7 @@ from pathlib import Path
 import tarfile
 
 from papers.cache import TEXT_FLOOR, meta_path, pdf_path, text_path, write_meta
-from papers.extract import looks_like_pdf, write_text
+from papers.extract import extract_html, looks_like_pdf, write_text
 from papers.fetch import MAX_PDF_BYTES, FetchError, download_pdf, fetch_bytes
 
 
@@ -205,6 +205,36 @@ def resolve(doi: str, mailto: str) -> bool:
                         },
                     )
                     return True
+        except Exception:
+            pass
+
+        _cleanup()
+
+        # Step B3: the article page itself. Author manuscripts (NIHMS deposits)
+        # are in PMC but not in its Open Access subset: Europe PMC has no XML
+        # for them, the AWS bucket does not carry them, and the PMC PDF link
+        # sits behind a browser proof-of-work challenge. The HTML page serves
+        # the full text to a plain client, so read that. No PDF is written.
+        try:
+            page_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{urllib.parse.quote(pmcid)}/"
+            html_text = fetch_bytes(page_url, mailto).decode("utf-8", errors="replace")
+            text = extract_html(html_text)
+            n = len(text.strip())
+            if n >= TEXT_FLOOR:
+                dest_txt.parent.mkdir(parents=True, exist_ok=True)
+                dest_txt.write_text(text, encoding="utf-8")
+                meta = {
+                    "title": title,
+                    "resolver": "uspmc",
+                    "journal": journal,
+                    "year": year,
+                    "text_chars": n,
+                    "pmcid": pmcid,
+                }
+                if "author manuscript" in html_text.lower():
+                    meta["version"] = "authorManuscript"
+                write_meta(doi, meta)
+                return True
         except Exception:
             pass
 
