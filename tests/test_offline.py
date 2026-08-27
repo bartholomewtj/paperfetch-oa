@@ -1858,7 +1858,9 @@ def test_status_corrupt_files_exits_0(home, capsys, monkeypatch):
     assert "queue" not in rec
 
 
-def test_uspmc_idconv_hit_direct_pdf_ok(home, capsys, monkeypatch):
+def test_uspmc_never_requests_direct_pdf(home, capsys, monkeypatch):
+    """pmc.ncbi.nlm.nih.gov/articles/{PMCID}/pdf/ is a proof-of-work page.
+    The resolver must not download it; AWS is the first PDF step."""
     import papers.uspmc
 
     monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
@@ -1871,11 +1873,15 @@ def test_uspmc_idconv_hit_direct_pdf_ok(home, capsys, monkeypatch):
     def fake_fetch_bytes(url, mailto):
         if "idconv" in url:
             return (FIXTURES / "idconv_hit.json").read_bytes()
+        if url.startswith("https://pmc-oa-opendata.s3.amazonaws.com/?list-type=2&prefix=PMC7102627."):
+            return (FIXTURES / "aws_listing_pmc7102627.xml").read_bytes()
         raise AssertionError(f"unexpected url: {url}")
 
     def fake_download_pdf(url, dest, mailto):
-        if "pmc.ncbi.nlm.nih.gov/articles/PMC7102627/pdf" in url:
-            return write_pdf(dest, "USPMC direct PDF readable content " * 30)
+        if "/articles/" in url and url.rstrip("/").endswith("/pdf"):
+            raise AssertionError(f"direct PMC /pdf/ must not be requested: {url}")
+        if url == "https://pmc-oa-opendata.s3.amazonaws.com/PMC7102627.1/PMC7102627.1.pdf":
+            return write_pdf(dest, "USPMC aws bucket readable content " * 30)
         raise AssertionError(f"unexpected url: {url}")
 
     monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
@@ -1933,7 +1939,7 @@ def test_uspmc_author_manuscript_reads_article_html(home, capsys, monkeypatch):
         raise AssertionError(f"unexpected url: {url}")
 
     def fake_download_pdf(url, dest, mailto):
-        raise FetchError("not a PDF")  # PMC's proof-of-work interstitial
+        raise AssertionError(f"download_pdf must not be called: {url}")
 
     monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
     monkeypatch.setattr("papers.uspmc.download_pdf", fake_download_pdf)
@@ -2026,46 +2032,14 @@ def test_uspmc_metadata_coercion(home, capsys, monkeypatch):
         ],
     }
 
-    monkeypatch.setattr("papers.uspmc.fetch_bytes", lambda url, mailto: json.dumps(data).encode("utf-8"))
-    monkeypatch.setattr(
-        "papers.uspmc.download_pdf",
-        lambda url, dest, mailto: write_pdf(dest, "USPMC direct PDF readable content " * 30),
-    )
-
-    code, out, _ = run(capsys, ["get", PLOS])
-    assert code == 0
-    rec = json.loads(out)
-    assert rec["status"] == "ok"
-    assert rec["title"] == "99999"
-
-    meta = read_meta(PLOS)
-    assert meta["title"] == "99999"
-    assert meta["journal"] == "88888"
-    assert meta["year"] == 2020
-
-
-def test_uspmc_direct_403_aws_bucket_pdf_ok(home, capsys, monkeypatch):
-    """Direct PDF blocked -> AWS Open Access bucket listing -> newest-version PDF.
-    oa.fcgi must not be reached (the FTP trees it points at are going away)."""
-    import papers.uspmc
-
-    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
-
-    def boom(*a, **k):
-        raise AssertionError("network / unpaywall must not be called")
-
-    monkeypatch.setattr("papers.cli.lookup", boom)
-
     def fake_fetch_bytes(url, mailto):
         if "idconv" in url:
-            return (FIXTURES / "idconv_hit.json").read_bytes()
+            return json.dumps(data).encode("utf-8")
         if url.startswith("https://pmc-oa-opendata.s3.amazonaws.com/?list-type=2&prefix=PMC7102627."):
             return (FIXTURES / "aws_listing_pmc7102627.xml").read_bytes()
         raise AssertionError(f"unexpected url: {url}")
 
     def fake_download_pdf(url, dest, mailto):
-        if "articles/PMC7102627/pdf" in url:
-            raise FetchError("HTTP Error 403: Forbidden")
         if url == "https://pmc-oa-opendata.s3.amazonaws.com/PMC7102627.1/PMC7102627.1.pdf":
             return write_pdf(dest, "USPMC aws bucket readable content " * 30)
         raise AssertionError(f"unexpected url: {url}")
@@ -2077,8 +2051,12 @@ def test_uspmc_direct_403_aws_bucket_pdf_ok(home, capsys, monkeypatch):
     assert code == 0
     rec = json.loads(out)
     assert rec["status"] == "ok"
-    assert rec["resolver"] == "uspmc"
-    assert read_meta(PLOS)["pmcid"] == "PMC7102627"
+    assert rec["title"] == "99999"
+
+    meta = read_meta(PLOS)
+    assert meta["title"] == "99999"
+    assert meta["journal"] == "88888"
+    assert meta["year"] == 2020
 
 
 def test_aws_pdf_key_picks_newest_version():
