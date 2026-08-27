@@ -131,30 +131,9 @@ def resolve(doi: str, mailto: str) -> bool:
         journal = _parse_journal(rec.get("journal"))
         year = _parse_year(rec.get("year"))
 
-        # Step B: direct PMC PDF
-        direct_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{urllib.parse.quote(pmcid)}/pdf/"
-        try:
-            download_pdf(direct_url, dest_pdf, mailto)
-            n = write_text(dest_pdf, dest_txt)
-            if n >= TEXT_FLOOR:
-                write_meta(
-                    doi,
-                    {
-                        "title": title,
-                        "resolver": "uspmc",
-                        "journal": journal,
-                        "year": year,
-                        "text_chars": n,
-                        "pmcid": pmcid,
-                    },
-                )
-                return True
-        except Exception:
-            pass
-
-        _cleanup()
-
-        # Step B2: AWS Open Access bucket (successor to the legacy FTP trees)
+        # Step B: AWS Open Access bucket. The old pmc.ncbi.nlm.nih.gov
+        # /articles/{PMCID}/pdf/ link is a JavaScript proof-of-work page
+        # (HTTP 200, text/html), so it is not a resolver step.
         try:
             listing_url = (
                 AWS_BUCKET
@@ -183,11 +162,11 @@ def resolve(doi: str, mailto: str) -> bool:
 
         _cleanup()
 
-        # Step B3: the article page itself. Author manuscripts (NIHMS deposits)
+        # Step C: the article page itself. Author manuscripts (NIHMS deposits)
         # are in PMC but not in its Open Access subset: Europe PMC has no XML
-        # for them, the AWS bucket does not carry them, and the PMC PDF link
-        # sits behind a browser proof-of-work challenge. The HTML page serves
-        # the full text to a plain client, so read that. No PDF is written.
+        # for them and the AWS bucket does not carry them. The HTML page
+        # serves the full text to a plain client, so read that. No PDF is
+        # written.
         try:
             page_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{urllib.parse.quote(pmcid)}/"
             html_text = fetch_bytes(page_url, mailto).decode("utf-8", errors="replace")
