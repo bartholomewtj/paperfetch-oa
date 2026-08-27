@@ -4,19 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 import urllib.parse
 import xml.etree.ElementTree as ET
-from pathlib import Path
-import tarfile
 
 from papers.cache import TEXT_FLOOR, meta_path, pdf_path, text_path, write_meta
-from papers.extract import extract_html, looks_like_pdf, write_text
-from papers.fetch import MAX_PDF_BYTES, FetchError, download_pdf, fetch_bytes
+from papers.extract import extract_html, write_text
+from papers.fetch import download_pdf, fetch_bytes
 
 
-FTP_PMC = "ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/"
-HTTPS_PMC = "https://ftp.ncbi.nlm.nih.gov/pub/pmc/"
 AWS_BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com/"
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
@@ -41,28 +36,6 @@ def aws_pdf_key(listing_xml: bytes, pmcid: str) -> str | None:
             if best is None or ver > best[0]:
                 best = (ver, key)
     return best[1] if best else None
-
-
-def _http_url(href: str) -> str:
-    if href.startswith("ftp://"):
-        return "https://" + href[len("ftp://"):]
-    return href
-
-
-def _http_urls(href: str) -> list[str]:
-    """URLs to try for an oa.fcgi link, in order.
-
-    oa.fcgi still hands out ftp:// paths under pub/pmc/, but NCBI moved the
-    legacy trees (oa_package/, oa_pdf/, manuscript/) to pub/pmc/deprecated/
-    in 2026 (readme dated 4/10/2026), so the plain https rewrite 404s.
-    Try it anyway (in case the link is updated), then the deprecated tree.
-    Long-term replacement is the AWS bucket (pmc.ncbi.nlm.nih.gov/tools/pmcaws/).
-    """
-    first = _http_url(href)
-    urls = [first]
-    if first.startswith(HTTPS_PMC) and "/deprecated/" not in first:
-        urls.append(HTTPS_PMC + "deprecated/" + first[len(HTTPS_PMC):])
-    return urls
 
 
 def _parse_title(raw: object) -> str:
@@ -181,7 +154,7 @@ def resolve(doi: str, mailto: str) -> bool:
 
         _cleanup()
 
-        # Step B2: AWS Open Access bucket (successor to the deprecated FTP trees)
+        # Step B2: AWS Open Access bucket (successor to the legacy FTP trees)
         try:
             listing_url = (
                 AWS_BUCKET
@@ -237,115 +210,6 @@ def resolve(doi: str, mailto: str) -> bool:
                 return True
         except Exception:
             pass
-
-        _cleanup()
-
-        # Step C: OA web service (legacy; the ftp trees are slated for removal)
-        oa_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={urllib.parse.quote(pmcid)}"
-        try:
-            xml_raw = fetch_bytes(oa_url, mailto)
-            root = ET.fromstring(xml_raw)
-        except Exception:
-            _cleanup()
-            return False
-
-        links = root.findall(".//link")
-        pdf_link: str | None = None
-        tgz_link: str | None = None
-
-        for link in links:
-            fmt = (link.attrib.get("format") or "").strip().lower()
-            href = (link.attrib.get("href") or "").strip()
-            if not href:
-                continue
-            if fmt == "pdf" and pdf_link is None:
-                pdf_link = href
-            elif fmt == "tgz" and tgz_link is None:
-                tgz_link = href
-
-        if pdf_link is not None:
-            try:
-                n = 0
-                for candidate in _http_urls(pdf_link):
-                    try:
-                        download_pdf(candidate, dest_pdf, mailto)
-                    except Exception:
-                        continue
-                    n = write_text(dest_pdf, dest_txt)
-                    break
-                if n >= TEXT_FLOOR:
-                    write_meta(
-                        doi,
-                        {
-                            "title": title,
-                            "resolver": "uspmc",
-                            "journal": journal,
-                            "year": year,
-                            "text_chars": n,
-                            "pmcid": pmcid,
-                        },
-                    )
-                    return True
-            except Exception:
-                pass
-            _cleanup()
-            return False
-
-        if tgz_link is not None:
-            tmp_path: Path | None = None
-            try:
-                raw_tgz = None
-                for candidate in _http_urls(tgz_link):
-                    try:
-                        raw_tgz = fetch_bytes(candidate, mailto)
-                        break
-                    except Exception:
-                        continue
-                if raw_tgz is None:
-                    raise FetchError("tgz unavailable")
-                fd, tmp_name = tempfile.mkstemp()
-                tmp_path = Path(tmp_name)
-                with open(fd, "wb") as f:
-                    f.write(raw_tgz)
-                with tarfile.open(tmp_path, "r:*") as tar:
-                    for member in tar.getmembers():
-                        if not member.isfile():
-                            continue
-                        name = member.name
-                        if ".." in name or name.startswith("/") or name.startswith("\\"):
-                            continue
-                        if name.lower().endswith(".pdf"):
-                            extracted = tar.extractfile(member)
-                            if extracted is not None:
-                                pdf_bytes = extracted.read()
-                                if looks_like_pdf(pdf_bytes) and len(pdf_bytes) <= MAX_PDF_BYTES:
-                                    dest_pdf.parent.mkdir(parents=True, exist_ok=True)
-                                    dest_pdf.write_bytes(pdf_bytes)
-                                    n = write_text(dest_pdf, dest_txt)
-                                    if n >= TEXT_FLOOR:
-                                        write_meta(
-                                            doi,
-                                            {
-                                                "title": title,
-                                                "resolver": "uspmc",
-                                                "journal": journal,
-                                                "year": year,
-                                                "text_chars": n,
-                                                "pmcid": pmcid,
-                                            },
-                                        )
-                                        return True
-                            break
-            except Exception:
-                pass
-            finally:
-                if tmp_path is not None:
-                    try:
-                        tmp_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-            _cleanup()
-            return False
 
         _cleanup()
         return False

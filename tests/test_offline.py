@@ -1898,114 +1898,6 @@ def test_uspmc_idconv_hit_direct_pdf_ok(home, capsys, monkeypatch):
     assert meta["year"] == 2020
 
 
-def test_uspmc_direct_403_oa_fcgi_pdf_ok(home, capsys, monkeypatch):
-    import papers.uspmc
-
-    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
-
-    def boom(*a, **k):
-        raise AssertionError("network / unpaywall must not be called")
-
-    monkeypatch.setattr("papers.cli.lookup", boom)
-
-    def fake_fetch_bytes(url, mailto):
-        if "idconv" in url:
-            return (FIXTURES / "idconv_hit.json").read_bytes()
-        if "oa.fcgi" in url:
-            return (FIXTURES / "oa_fcgi_pdf.xml").read_bytes()
-        raise AssertionError(f"unexpected url: {url}")
-
-    def fake_download_pdf(url, dest, mailto):
-        if "articles/PMC7102627/pdf" in url:
-            raise FetchError("HTTP Error 403: Forbidden")
-        if "oa_pdf" in url:
-            return write_pdf(dest, "USPMC oa_pdf readable content " * 30)
-        raise AssertionError(f"unexpected url: {url}")
-
-    monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
-    monkeypatch.setattr("papers.uspmc.download_pdf", fake_download_pdf)
-
-    code, out, _ = run(capsys, ["get", PLOS])
-    assert code == 0
-    rec = json.loads(out)
-    assert rec["status"] == "ok"
-    assert rec["resolver"] == "uspmc"
-    assert rec["text_chars"] >= 500
-
-    meta = read_meta(PLOS)
-    assert meta["pmcid"] == "PMC7102627"
-    assert meta["resolver"] == "uspmc"
-
-
-def test_uspmc_direct_403_oa_fcgi_tgz_ok(home, capsys, monkeypatch):
-    import io
-    import tarfile
-    import papers.uspmc
-
-    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
-
-    def boom(*a, **k):
-        raise AssertionError("network / unpaywall must not be called")
-
-    monkeypatch.setattr("papers.cli.lookup", boom)
-
-    pdf_bytes = build_pdf_bytes("USPMC tarball readable content " * 30)
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        info = tarfile.TarInfo(name="PMC7102627/article.pdf")
-        info.size = len(pdf_bytes)
-        tar.addfile(info, io.BytesIO(pdf_bytes))
-    tgz_bytes = buf.getvalue()
-
-    seen = []
-
-    def fake_fetch_bytes(url, mailto):
-        if "idconv" in url:
-            return (FIXTURES / "idconv_hit.json").read_bytes()
-        if "oa.fcgi" in url:
-            return (FIXTURES / "oa_fcgi_tgz.xml").read_bytes()
-        if url.endswith(".tar.gz"):
-            # Live 18 Aug 2026: NCBI moved oa_package/ under pub/pmc/deprecated/;
-            # the plain https rewrite of the ftp:// href 404s.
-            seen.append(url)
-            assert url.startswith("https://")
-            if "/pub/pmc/deprecated/" not in url:
-                raise FetchError("HTTP Error 404: Not Found")
-            return tgz_bytes
-        raise AssertionError(f"unexpected url: {url}")
-
-    def fake_download_pdf(url, dest, mailto):
-        if "articles/PMC7102627/pdf" in url:
-            raise FetchError("HTTP Error 403: Forbidden")
-        raise AssertionError(f"download_pdf should not be called for {url}")
-
-    monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
-    monkeypatch.setattr("papers.uspmc.download_pdf", fake_download_pdf)
-
-    code, out, _ = run(capsys, ["get", PLOS])
-    assert code == 0
-    rec = json.loads(out)
-    assert rec["status"] == "ok"
-    assert rec["resolver"] == "uspmc"
-    assert pdf_path(PLOS).is_file()
-    assert rec["text_chars"] >= 500
-
-    meta = read_meta(PLOS)
-    assert meta["pmcid"] == "PMC7102627"
-    assert meta["resolver"] == "uspmc"
-    assert len(seen) == 2 and "/pub/pmc/deprecated/oa_package/" in seen[1]
-
-    # Ensure no leftover temp files exist
-    cache_dir = cache_root()
-    cwd = Path.cwd()
-    leftovers = (
-        list(cache_dir.rglob("*.tar.gz"))
-        + list(cache_dir.rglob("*.tgz"))
-        + list(cwd.glob("*.tar.gz"))
-        + list(cwd.glob("*.tgz"))
-    )
-    assert not leftovers
-
 def test_extract_html_keeps_abstract_and_body_only():
     page = (FIXTURES / "pmc_article_manuscript.html").read_text(encoding="utf-8")
     text = extract_html(page)
@@ -2113,14 +2005,6 @@ def test_uspmc_idconv_http_500_falls_through(home, capsys, monkeypatch):
     assert rec["tried"] == "europepmc,uspmc,unpaywall"
     assert not pdf_path(CLOSED).exists()
     assert not text_path(CLOSED).exists()
-
-
-def test_uspmc_ftp_url_rewritten():
-    from papers.uspmc import _http_url
-
-    assert _http_url("ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/x/y/PMC123.pdf") == "https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/x/y/PMC123.pdf"
-    assert _http_url("https://example.com/file.pdf") == "https://example.com/file.pdf"
-    assert _http_url("http://example.com/file.pdf") == "http://example.com/file.pdf"
 
 
 def test_uspmc_metadata_coercion(home, capsys, monkeypatch):
