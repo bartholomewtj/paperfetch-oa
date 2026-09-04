@@ -107,6 +107,11 @@ def uspmc_default_skip(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def biorxiv_default_skip(monkeypatch):
+    monkeypatch.setattr("papers.cli.biorxiv_resolve", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def openalex_default_skip(monkeypatch):
     monkeypatch.setattr("papers.cli.openalex_resolve", lambda *a, **k: None)
 
@@ -1017,6 +1022,43 @@ def test_biorxiv_preprint_ok(home, capsys, monkeypatch):
     assert rec["resolver"] == "preprint"
     assert rec["version"] == "preprint"
     assert urls_called == [f"https://www.biorxiv.org/content/{doi}v1.full.pdf"]
+
+
+def test_biorxiv_api_hit_before_unpaywall(home, capsys, monkeypatch):
+    """The API resolver sits after US PMC and before Unpaywall in the ladder."""
+    import shutil
+
+    import papers.biorxiv
+
+    doi = "10.1101/2020.03.24.20042937"
+    api_json = (FIXTURES / "biorxiv_details_response.json").read_bytes()
+    downloads: list[str] = []
+
+    def fake_fetch_bytes(url, mailto):
+        assert url == f"https://api.biorxiv.org/details/biorxiv/{doi}"
+        return api_json
+
+    def fake_download_pdf(url, dest, mailto):
+        downloads.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(FIXTURES / "biorxiv_sample.pdf", dest)
+
+    monkeypatch.setattr("papers.biorxiv.fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr("papers.biorxiv.download_pdf", fake_download_pdf)
+    monkeypatch.setattr("papers.cli.biorxiv_resolve", papers.biorxiv.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: (_ for _ in ()).throw(AssertionError("Unpaywall must not run")),
+    )
+
+    code, out, _ = run(capsys, ["get", doi])
+    assert code == 0
+    rec = json.loads(out)
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "biorxiv"
+    assert rec["version"] == "v2"
+    assert downloads == [f"https://www.biorxiv.org/content/{doi}v2.full.pdf"]
+    assert read_meta(doi)["server"] == "biorxiv"
 
 
 def test_medrxiv_preprint_fallback(home, capsys, monkeypatch):

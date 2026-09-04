@@ -20,6 +20,7 @@ from papers.cache import (
     text_path,
     write_meta,
 )
+from papers.biorxiv import resolve as biorxiv_resolve
 from papers.core import resolve as core_resolve
 from papers.crossref import resolve_title as crossref_resolve_title
 from papers.europepmc import resolve as europepmc_resolve
@@ -128,6 +129,12 @@ def get_paper(raw: str) -> tuple[dict, int]:
     if uspmc_res is True:
         return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
 
+    # bioRxiv / medRxiv: their own API knows the newest version and server,
+    # so this beats Unpaywall's stale links and the guessed v1 URL later on.
+    biorxiv_res = biorxiv_resolve(doi, mailto)
+    if biorxiv_res is True:
+        return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
+
     # Unpaywall: an API error or a blocked publisher PDF must not end the run —
     # OpenAlex / S2 / preprints / CORE may still hold a copy.
     result = None
@@ -140,6 +147,8 @@ def get_paper(raw: str) -> tuple[dict, int]:
     title = result.title if result else ""
     if uspmc_res is False:
         tried.append("uspmc")
+    if biorxiv_res is False:
+        tried.append("biorxiv")
     locations = list(result.locations) if result else []
     if result and result.pdf_url and not locations:
         locations = [(result.pdf_url, result.license, result.version)]

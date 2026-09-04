@@ -1,0 +1,44 @@
+{
+ "messages": [
+  {
+   "status": "ok",
+   "category": "all"
+  }
+ ],
+ "collection": [
+  {
+   "title": "Correlation between universal BCG vaccination policy and reduced mortality for COVID-19",
+   "authors": "Miller, A.; Reandelar, M. J.; Fasciglione, K.; Roumenova, V.; Li, Y.; Otazu, G. H.",
+   "author_corresponding": "Gonzalo H Otazu",
+   "author_corresponding_institution": "Example Institute",
+   "doi": "10.1101/2020.03.24.20042937",
+   "type": "PUBLISHAHEADOFPRINT",
+   "license": "cc_by_nd",
+   "category": "epidemiology",
+   "abstract": "Abstract text.",
+   "funder": "NA",
+   "published": "NA",
+   "version": "1",
+   "date": "2020-03-28",
+   "server": "bioRxiv",
+   "jatsxml": "https://www.biorxiv.org/content/early/2020/03/28/2020.03.24.20042937.source.xml"
+  },
+  {
+   "title": "Correlation between universal BCG vaccination policy and reduced mortality for COVID-19",
+   "authors": "Miller, A.; Reandelar, M. J.; Fasciglione, K.; Roumenova, V.; Li, Y.; Otazu, G. H.",
+   "author_corresponding": "Gonzalo H Otazu",
+   "author_corresponding_institution": "Example Institute",
+   "doi": "10.1101/2020.03.24.20042937",
+   "type": "PUBLISHAHEADOFPRINT",
+   "license": "cc_by_nd",
+   "category": "epidemiology",
+   "abstract": "Abstract text.",
+   "funder": "NA",
+   "published": "NA",
+   "version": "2",
+   "date": "2020-09-14",
+   "server": "bioRxiv",
+   "jatsxml": "https://www.biorxiv.org/content/early/2020/09/14/2020.03.24.20042937.source.xml"
+  }
+ ]
+}
