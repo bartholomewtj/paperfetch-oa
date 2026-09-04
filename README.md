@@ -42,6 +42,26 @@ If `papers` is not on PATH, use `python -m papers`.
 
 `papers get` prints one JSON object on stdout. When given a title, it prints `resolved title -> {doi}` on stderr before running the ladder. Unknown title returns `{status: "no_doi", agent_next: "notify_human"}` and exits 1. Agents read `text.txt` (path in `read`), not the PDF.
 
+### What `text.txt` looks like
+
+Each cached paper's `text.txt` has a marker line before every standard section it found, then a blank line, then the section's text:
+
+```
+## Introduction
+
+Sharing information facilitates science. ...
+
+## Results
+
+Of the 85 publications, ...
+```
+
+The standard sections are `abstract`, `introduction`, `methods`, `results`, `discussion` and `conclusions`. Title, authors and anything before the first heading stay at the top with no marker. Subsections and other headings that are not recognised ("Genotyping", "Patient characteristics") stay in the body as plain lines under the nearest marker. The reference list, acknowledgements, funding, supporting-information lists and repeated page headers and footers are dropped, so a volume or page number in a citation cannot be mistaken for a result. This is the same shape on every route: PDF, Europe PMC XML and PMC HTML.
+
+`meta.json` records what was found as `"sections": ["introduction", "results", "discussion", "methods"]` (lowercase, in document order). A PDF with no detectable headings still extracts as plain text, with no markers and `"sections": []`.
+
+PDFs are read with PyMuPDF (it replaced pypdf). It keeps reading order in two-column layouts and exposes font sizes, which is how headings are found: a line that names a standard section and is larger than the body text, bold, or in capitals.
+
 Statuses:
 
 | Status | Meaning |

@@ -11,6 +11,11 @@ TEXT_FLOOR = 500
 MAX_KEY_LEN = 180
 MAX_CHARS = 12_000
 
+# Canonical section names. text.txt carries a "## Results" marker line before
+# each one found; meta.json lists them (lowercase) under "sections".
+SECTION_NAMES = ("abstract", "introduction", "methods", "results", "discussion", "conclusions")
+_SECTION_MARKER = re.compile(r"^## (" + "|".join(n.title() for n in SECTION_NAMES) + r")$", re.MULTILINE)
+
 _BAD_CHARS = '<>:"\\|?*'
 _RESERVED = re.compile(
     r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$",
@@ -84,10 +89,30 @@ def read_meta(doi: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def text_sections(doi: str) -> list[str]:
+    """Canonical names of the marker lines in text.txt, in document order."""
+    path = text_path(doi)
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    found: list[str] = []
+    for m in _SECTION_MARKER.finditer(text):
+        name = m.group(1).lower()
+        if name not in found:
+            found.append(name)
+    return found
+
+
 def write_meta(doi: str, data: dict) -> None:
     folder = paper_dir(doi)
     folder.mkdir(parents=True, exist_ok=True)
     payload = {"doi": doi, **data}
+    # Every route writes text.txt before meta.json, so the sections it found
+    # are read back from the marker lines rather than threaded through callers.
+    payload.setdefault("sections", text_sections(doi))
     meta_path(doi).write_text(
         json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
