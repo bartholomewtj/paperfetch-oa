@@ -381,8 +381,13 @@ def test_usage_missing_mailto(home, capsys, monkeypatch):
     monkeypatch.delenv("PAPERS_MAILTO", raising=False)
     code, out, err = run(capsys, ["get", PLOS])
     assert code == 1
-    assert "PAPERS_MAILTO" in err
-    assert out == ""
+    assert err == ""
+    assert out.count("\n") == 1
+    assert json.loads(out) == {
+        "status": "config_error",
+        "reason": "set PAPERS_MAILTO to your email",
+        "agent_next": "notify_human; stop_fetch",
+    }
 
 
 def test_html_as_pdf_falls_through_to_queue(home, capsys, monkeypatch):
@@ -2073,3 +2078,83 @@ def test_aws_pdf_key_picks_newest_version():
     assert aws_pdf_key(xml, "PMC1") == "PMC1.3/PMC1.3.pdf"
     assert aws_pdf_key(b"<ListBucketResult/>", "PMC1") is None
     assert aws_pdf_key(b"not xml", "PMC1") is None
+
+
+def test_get_batch_stdin_three_dois_in_order(home, capsys, monkeypatch):
+    dois = ["10.1000/batch-a", "10.1000/batch-b", "10.1000/batch-c"]
+    for d in dois:
+        seed_ok(d, title=f"Paper {d}")
+
+    def boom(*a, **k):
+        raise AssertionError("network should not run")
+
+    monkeypatch.setattr("papers.cli.lookup", boom)
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n".join([dois[0], "", dois[1], "  ", dois[2]]) + "\n"))
+    code, out, err = run(capsys, ["get", "-"])
+    assert code == 0
+    lines = out.splitlines()
+    assert len(lines) == 3
+    recs = [json.loads(ln) for ln in lines]
+    assert [r["doi"] for r in recs] == dois
+    assert all(r["status"] == "ok" for r in recs)
+    # each line is exactly what a single get prints
+    _, single, _ = run(capsys, ["get", dois[1]])
+    assert lines[1] == single.rstrip("\n")
+
+
+def test_get_batch_positional_mixed_exits_2(home, capsys, monkeypatch):
+    seed_ok(PLOS)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Closed paper", "JAMA", 2018, None, None),
+    )
+    code, out, _ = run(capsys, ["get", PLOS, CLOSED])
+    assert code == 2
+    recs = [json.loads(ln) for ln in out.splitlines()]
+    assert [r["status"] for r in recs] == ["ok", "no_oa"]
+    assert [r["doi"] for r in recs] == [PLOS, CLOSED]
+
+
+def test_get_batch_title_on_stdin_prints_resolved(home, capsys, monkeypatch):
+    seed_ok(PLOS)
+    cr_json = (FIXTURES / "crossref_title.json").read_bytes()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: io.BytesIO(cr_json))
+    monkeypatch.setattr("sys.stdin", io.StringIO("A mutation in the VPS33A gene\n"))
+    code, out, err = run(capsys, ["get", "-"])
+    assert code == 0
+    assert err.strip() == f"resolved title -> {PLOS}"
+    assert json.loads(out)["doi"] == PLOS
+
+
+def test_get_stdin_empty_is_config_error(home, capsys, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n\n"))
+    code, out, err = run(capsys, ["get", "-"])
+    assert code == 1
+    assert json.loads(out)["status"] == "config_error"
+
+
+def test_get_batch_s2_skip_holds_across_batch(home, capsys, monkeypatch):
+    import papers.semanticscholar
+
+    sleeps = []
+    calls = []
+    monkeypatch.setattr("papers.semanticscholar._sleep", lambda s: sleeps.append(s))
+
+    def fake_429_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", hdrs=None, fp=io.BytesIO(b""))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_429_urlopen)
+    monkeypatch.setattr("papers.cli.s2_resolve", papers.semanticscholar.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "429 test paper", "JAMA", 2018, None, None),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("10.1000/s2-one\n10.1000/s2-two\n"))
+    code, out, _ = run(capsys, ["get", "-"])
+    assert code == 2
+    recs = [json.loads(ln) for ln in out.splitlines()]
+    assert [r["doi"] for r in recs] == ["10.1000/s2-one", "10.1000/s2-two"]
+    assert sleeps == [30]  # one sleep for the whole batch, not one per DOI
+    assert len(calls) == 2  # first try + retry on DOI one; DOI two never hits S2
+    assert papers.semanticscholar._skip_for_process is True

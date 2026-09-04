@@ -35,12 +35,18 @@ Optional: set `CORE_API_KEY` to add [CORE](https://core.ac.uk/services/api) as t
 ```
 papers get 10.1371/journal.pone.0000308
 papers get "Sharing detailed research data is associated with increased citation rate"
+papers get 10.1371/journal.pone.0000308 10.1001/jamapsychiatry.2018.1776
+papers get - < dois.txt
 papers status
 ```
 
 If `papers` is not on PATH, use `python -m papers`.
 
 `papers get` prints one JSON object on stdout. When given a title, it prints `resolved title -> {doi}` on stderr before running the ladder. Unknown title returns `{status: "no_doi", agent_next: "notify_human"}` and exits 1. Agents read `text.txt` (path in `read`), not the PDF.
+
+`papers get` takes more than one DOI or title, and `papers get -` reads one per line from stdin (blank lines skipped). Output is one JSON line per input, in input order, each the same record a single `get` prints. Exit code is 0 when every line is `ok`, else 2. Use this when fetching a list: one process means the Semantic Scholar rate-limit skip and the Unpaywall error memo hold across the whole batch, so a keyless run pays the 30-second 429 sleep once, not once per DOI. A single DOI behaves exactly as before.
+
+A usage error (for example `PAPERS_MAILTO` unset) prints `{"status": "config_error", "reason": "...", "agent_next": "notify_human; stop_fetch"}` on stdout and exits 1, so stdout is always JSON.
 
 Statuses:
 
@@ -51,6 +57,7 @@ Statuses:
 | `unreadable_pdf` | Got a PDF, no extractable text (likely a scan). |
 | `retry` | Unpaywall API unreachable and nothing else hit. Try later. |
 | `no_doi` | Title did not resolve to a DOI. |
+| `config_error` | Bad setup, such as no `PAPERS_MAILTO`. `reason` says what to fix. |
 
 Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download or a PDF with no extractable text moves on to the next location, then the next resolver, rather than stopping.
 
