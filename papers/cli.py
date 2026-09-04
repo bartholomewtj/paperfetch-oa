@@ -88,6 +88,14 @@ def _retry_record(doi: str) -> dict:
     }
 
 
+def _config_error_record(reason: str) -> dict:
+    return {
+        "status": "config_error",
+        "reason": reason,
+        "agent_next": "notify_human; stop_fetch",
+    }
+
+
 def get_paper(raw: str) -> tuple[dict, int]:
     if not looks_like_doi(raw):
         mailto = _mailto()
@@ -229,6 +237,40 @@ def get_paper(raw: str) -> tuple[dict, int]:
     return _no_oa_record(doi, title, tried_str), 2
 
 
+def _get_inputs(items: list[str]) -> list[str]:
+    """Expand the `get` arguments. `-` means one DOI or title per stdin line."""
+    out: list[str] = []
+    for item in items:
+        if item != "-":
+            out.append(item)
+            continue
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                out.append(line)
+    if not out:
+        raise UsageError("no DOI or title given")
+    return out
+
+
+def get_many(items: list[str]) -> int:
+    """Run get_paper for each input in one process, one JSON line each.
+
+    One input behaves exactly like before. For more than one, the exit code is
+    0 only if every line is ok, else 2. Per-process memos (the Semantic Scholar
+    skip, the Unpaywall error memo) carry across the whole batch.
+    """
+    inputs = _get_inputs(items)
+    codes: list[int] = []
+    for raw in inputs:
+        record, code = get_paper(raw)
+        print(json.dumps(record), flush=True)
+        codes.append(code)
+    if len(codes) == 1:
+        return codes[0]
+    return 0 if all(c == 0 for c in codes) else 2
+
+
 def status_report() -> dict:
     try:
         inv = cache_inventory()
@@ -257,8 +299,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    get_p = sub.add_parser("get", help="Fetch a paper by DOI or title")
-    get_p.add_argument("doi", help="DOI or paper title")
+    get_p = sub.add_parser("get", help="Fetch one or more papers by DOI or title")
+    get_p.add_argument(
+        "doi",
+        nargs="+",
+        help="DOI or paper title (repeatable); '-' reads one per line from stdin",
+    )
 
     st_p = sub.add_parser("status", help="Show local cache counts as JSON")
     st_p.add_argument("--json", action="store_true", help="Print JSON (default)")
@@ -278,13 +324,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(status_report()), flush=True)
             return 0
         if args.cmd == "get":
-            record, code = get_paper(args.doi)
-            print(json.dumps(record), flush=True)
-            return code
+            return get_many(args.doi)
         parser.print_help()
         return 1
     except UsageError as exc:
-        print(str(exc), file=sys.stderr)
+        if args.cmd == "get":
+            print(json.dumps(_config_error_record(str(exc))), flush=True)
+        else:
+            print(str(exc), file=sys.stderr)
         return 1
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
