@@ -1,0 +1,253 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "papers get",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "DOI to text.txt",
+        "focus": ["cmd", "identify", "cache", "ladder", "extract", "result"],
+        "note": "Resolve the DOI, reuse a warm cache, take the first readable OA copy, extract, print JSON."
+      },
+      {
+        "id": "resolver-fallback",
+        "label": "OA ladder",
+        "focus": ["cache", "ladder", "extract", "no_oa"],
+        "note": "Europe PMC, then US PMC, bioRxiv, Unpaywall, OpenAlex, Semantic Scholar, preprint URLs, then CORE."
+      },
+      {
+        "id": "failure-exits",
+        "label": "Failure exits",
+        "focus": ["identify", "no_doi", "config_error", "ladder", "no_oa", "extract", "unreadable"],
+        "note": "Each stop prints one JSON status: no_doi, config_error, no_oa, retry, or unreadable_pdf."
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "you", "label": "You" },
+    { "id": "cli", "label": "CLI" },
+    { "id": "sources", "label": "Sources" },
+    { "id": "stop", "label": "Stop", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "identify", "label": "Identify", "fromCol": 0, "toCol": 1 },
+    { "id": "resolve", "label": "Resolve", "fromCol": 2, "toCol": 3 },
+    { "id": "extract", "label": "Extract", "fromCol": 4, "toCol": 4, "variant": "emphasis" },
+    { "id": "return", "label": "Return", "fromCol": 5, "toCol": 5 }
+  ],
+  "mainPath": ["cmd", "identify", "cache", "ladder", "extract", "result"],
+  "semanticChecks": {
+    "allowedRoots": ["cmd"],
+    "allowedTerminals": ["result", "no_doi", "config_error", "no_oa", "unreadable"],
+    "requiredEdges": [
+      { "from": "identify", "to": "no_doi" },
+      { "from": "identify", "to": "config_error" },
+      { "from": "ladder", "to": "no_oa" },
+      { "from": "extract", "to": "unreadable" }
+    ],
+    "requiredPaths": [
+      { "from": "cmd", "to": "result" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "cmd",
+      "lane": "you",
+      "col": 0,
+      "type": "frontend",
+      "label": "papers get",
+      "sublabel": "DOI or title",
+      "width": 132
+    },
+    {
+      "id": "identify",
+      "lane": "cli",
+      "col": 1,
+      "type": "backend",
+      "label": "Identify DOI",
+      "sublabel": "Crossref if title",
+      "tag": "PAPERS_MAILTO",
+      "width": 132
+    },
+    {
+      "id": "no_doi",
+      "lane": "stop",
+      "col": 1,
+      "type": "security",
+      "label": "no_doi",
+      "sublabel": "title not found",
+      "width": 132
+    },
+    {
+      "id": "config_error",
+      "lane": "stop",
+      "col": 2,
+      "type": "security",
+      "label": "config_error",
+      "sublabel": "PAPERS_MAILTO unset",
+      "width": 132
+    },
+    {
+      "id": "cache",
+      "lane": "cli",
+      "col": 2,
+      "type": "database",
+      "label": "~/.paperfetch",
+      "sublabel": "text.txt · meta.json",
+      "width": 132
+    },
+    {
+      "id": "ladder",
+      "lane": "sources",
+      "col": 3,
+      "type": "cloud",
+      "label": "OA ladder",
+      "sublabel": "Europe PMC first",
+      "tag": "Unpaywall · OpenAlex · CORE",
+      "width": 132
+    },
+    {
+      "id": "no_oa",
+      "lane": "stop",
+      "col": 3,
+      "type": "security",
+      "label": "no_oa · retry",
+      "sublabel": "tried lists sources",
+      "width": 132
+    },
+    {
+      "id": "extract",
+      "lane": "sources",
+      "col": 4,
+      "type": "backend",
+      "label": "Extract text",
+      "sublabel": "PyMuPDF",
+      "tag": "## Introduction",
+      "width": 132
+    },
+    {
+      "id": "unreadable",
+      "lane": "stop",
+      "col": 4,
+      "type": "security",
+      "label": "unreadable_pdf",
+      "sublabel": "text too short",
+      "width": 132
+    },
+    {
+      "id": "result",
+      "lane": "you",
+      "col": 5,
+      "type": "frontend",
+      "label": "JSON + text.txt",
+      "sublabel": "status ok",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-get",
+      "from": "cmd",
+      "to": "identify",
+      "label": "DOI or title",
+      "variant": "emphasis"
+    },
+    {
+      "id": "identify-stop",
+      "from": "identify",
+      "to": "no_doi",
+      "label": "no_doi",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "identify-config",
+      "from": "identify",
+      "to": "config_error",
+      "label": "PAPERS_MAILTO unset",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "identify-cache",
+      "from": "identify",
+      "to": "cache",
+      "variant": "default"
+    },
+    {
+      "id": "cache-hit",
+      "from": "cache",
+      "to": "result",
+      "label": "text.txt ready",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "cache-ladder",
+      "from": "cache",
+      "to": "ladder",
+      "label": "not cached",
+      "variant": "default"
+    },
+    {
+      "id": "ladder-extract",
+      "from": "ladder",
+      "to": "extract",
+      "label": "first readable copy",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ladder-stop",
+      "from": "ladder",
+      "to": "no_oa",
+      "label": "no_oa · retry",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "extract-result",
+      "from": "extract",
+      "to": "result",
+      "label": "ok",
+      "variant": "emphasis"
+    },
+    {
+      "id": "extract-stop",
+      "from": "extract",
+      "to": "unreadable",
+      "label": "unreadable_pdf",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What it fetches",
+      "items": [
+        "papers get takes a DOI or a title and returns already-open full text.",
+        "No login. CORE runs only when CORE_API_KEY is set."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Where files go",
+      "items": [
+        "~/.paperfetch/cache/<doi-key>/ holds paper.pdf, text.txt, and meta.json.",
+        "If text.txt is already readable, the run returns ok without downloading."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "What fails",
+      "items": [
+        "no_doi if Crossref cannot turn a title into a DOI.",
+        "no_oa, unreadable_pdf, or retry if no readable copy is found.",
+        "config_error if PAPERS_MAILTO is unset."
+      ]
+    }
+  ]
+}

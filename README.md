@@ -1,12 +1,12 @@
 # paperfetch-oa
 
-Get a paper's **open-access** full text from a DOI or title.
+Get a paper's **open-access** full text from a DOI or a title.
 
-Resolver ladder: cache → Europe PMC → US PMC → bioRxiv / medRxiv API → Unpaywall → OpenAlex → Semantic Scholar → preprint shortcuts → CORE (with key). US PMC also reads the article page itself when PMC has no downloadable PDF — that is how NIH author manuscripts (in PMC, but not in its open-access subset) come back as text. For `10.1101/` preprints the bioRxiv / medRxiv step asks Cold Spring Harbor's own API (`api.biorxiv.org`) which server holds the paper and which version is newest, then fetches that version's PDF; `meta.json` records `resolver: biorxiv`, `version: vN` and `server` (`biorxiv` or `medrxiv`). The guessed `v1` URL in the preprint shortcuts stays as the last resort.
+Install it, set your email, run `papers get`. It looks through public sources, saves a PDF plus plain text on your machine, and prints one JSON object so you know what happened.
 
-This is the public subset of a private tool. It only fetches copies that are already open. It does not log in anywhere, does not keep a library pickup list, and does not ingest files you downloaded by hand.
+It only fetches copies that are already open. It does not log in anywhere.
 
-Do not install this next to the private `paperfetch` package. Both expose the `papers` command and the `papers` Python package. This one is for a public host (or a machine that only needs OA).
+Python 3.10+.
 
 ## Install
 
@@ -20,33 +20,89 @@ Or from a clone:
 pip install -e .
 ```
 
-Set `PAPERS_MAILTO` to your real email. Unpaywall, OpenAlex, and Crossref require it. Do not use a made-up address.
+If the `papers` command is not on your PATH, use `python -m papers` instead.
+
+## Set your email
+
+Unpaywall, OpenAlex, and Crossref require a real contact address. Do not use a made-up one.
+
+macOS / Linux:
+
+```
+export PAPERS_MAILTO="you@your-domain"
+```
+
+Windows PowerShell:
 
 ```
 $env:PAPERS_MAILTO="you@your-domain"
 ```
 
-Optional: set `SEMANTIC_SCHOLAR_API_KEY` for higher Semantic Scholar rate limits (keyless traffic 429s and is then skipped for the rest of the process; never commit keys).
-
-Optional: set `CORE_API_KEY` to add [CORE](https://core.ac.uk/services/api) as the last resolver. Register free at https://core.ac.uk/api-keys/register. Without a key CORE is skipped.
-
-## Commands
+## Get a paper
 
 ```
 papers get 10.1371/journal.pone.0000308
 papers get "Sharing detailed research data is associated with increased citation rate"
+```
+
+Several at once, or a file of DOIs / titles (one per line):
+
+```
 papers get 10.1371/journal.pone.0000308 10.1001/jamapsychiatry.2018.1776
 papers get - < dois.txt
+```
+
+A title is resolved through Crossref first (`resolved title -> {doi}` on stderr). Prefer a DOI when you have one — titles are fuzzy. Title lookup skips preprints and reviewer reports, and prefers a journal article.
+
+`papers get` prints one JSON object per input, in input order. Exit code is 0 when every line is `ok`. One input that is not `ok` exits 1 (`no_doi`, `config_error`) or 2 (the rest). A batch of mixed results exits 2.
+
+Read the file at `read`, not the PDF.
+
+```
+{
+  "status": "ok",
+  "doi": "10.1371/journal.pone.0000308",
+  "title": "Sharing Detailed Research Data Is Associated with Increased Citation Rate",
+  "resolver": "europepmc",
+  "read": "/home/you/.paperfetch/cache/10.1371%2Fjournal.pone.0000308/text.txt",
+  "text_chars": 8432,
+  "agent_next": "read_text; cite_doi_and_version; do_not_attach_pdf"
+}
+```
+
+Check the local cache (no network):
+
+```
 papers status
 ```
 
-If `papers` is not on PATH, use `python -m papers`.
+## How it works
 
-`papers get` prints one JSON object on stdout. When given a title, it prints `resolved title -> {doi}` on stderr before running the ladder. Unknown title returns `{status: "no_doi", agent_next: "notify_human"}` and exits 1. Agents read `text.txt` (path in `read`), not the PDF.
+![How papers get works](docs/pipeline.png)
 
-### What `text.txt` looks like
+Open [`docs/pipeline.html`](docs/pipeline.html) after a clone for the interactive version (pan, zoom, three views).
 
-Each cached paper's `text.txt` has a marker line before every standard section it found, then a blank line, then the section's text:
+1. **Identify.** A `10.…` token is a DOI. Anything else goes to Crossref. Missing `PAPERS_MAILTO` is `config_error`.
+2. **Cache.** Hits live under `~/.paperfetch` (Windows: `%USERPROFILE%\.paperfetch`). A readable `text.txt` already there is returned as `ok` with no download.
+3. **OA ladder.** First readable copy wins: Europe PMC → US PMC → bioRxiv / medRxiv → Unpaywall → OpenAlex → Semantic Scholar → preprint URL shortcuts → CORE (only with a key).
+4. **Extract.** PyMuPDF turns the PDF into `text.txt`. Europe PMC XML and PMC HTML write the same shape.
+5. **Return.** JSON on stdout. Files stay in the cache for the next run.
+
+US PMC also reads the article page when PMC has no downloadable PDF — that is how NIH author manuscripts come back as text. For `10.1101/` preprints, the bioRxiv / medRxiv step asks Cold Spring Harbor which server holds the paper and which version is newest, then fetches that PDF.
+
+Unpaywall tries every open location it knows, repository copies before publisher sites. A failed download or a PDF with no extractable text moves on to the next location, then the next resolver, rather than stopping.
+
+## What you get
+
+Each cached paper is a folder:
+
+| File | Contents |
+|---|---|
+| `paper.pdf` | The downloaded file |
+| `text.txt` | Extracted text, section markers |
+| `meta.json` | Title, resolver, version, license, `sections` |
+
+`text.txt` puts a marker line before every standard section it found, then a blank line, then the section's text:
 
 ```
 ## Introduction
@@ -58,39 +114,42 @@ Sharing information facilitates science. ...
 Of the 85 publications, ...
 ```
 
-The standard sections are `abstract`, `introduction`, `methods`, `results`, `discussion` and `conclusions`. Title, authors and anything before the first heading stay at the top with no marker. Subsections and other headings that are not recognised ("Genotyping", "Patient characteristics") stay in the body as plain lines under the nearest marker. The reference list, acknowledgements, funding, supporting-information lists and repeated page headers and footers are dropped, so a volume or page number in a citation cannot be mistaken for a result. This is the same shape on every route: PDF, Europe PMC XML and PMC HTML.
+The standard sections are `abstract`, `introduction`, `methods`, `results`, `discussion` and `conclusions`. Title, authors and anything before the first heading stay at the top with no marker. Other headings ("Genotyping", "Patient characteristics") stay in the body under the nearest marker. The reference list, acknowledgements, funding, supporting-information lists and repeated page headers and footers are dropped.
 
 `meta.json` records what was found as `"sections": ["introduction", "results", "discussion", "methods"]` (lowercase, in document order). A PDF with no detectable headings still extracts as plain text, with no markers and `"sections": []`.
 
-PDFs are read with PyMuPDF (it replaced pypdf). It keeps reading order in two-column layouts and exposes font sizes, which is how headings are found: a line that names a standard section and is larger than the body text, bold, or in capitals.
+Headings are found by font: a line that names a standard section and is larger than the body text, bold, or in capitals.
 
-`papers get` takes more than one DOI or title, and `papers get -` reads one per line from stdin (blank lines skipped). Output is one JSON line per input, in input order, each the same record a single `get` prints. Exit code is 0 when every line is `ok`, else 2. Use this when fetching a list: one process means the Semantic Scholar rate-limit skip and the Unpaywall error memo hold across the whole batch, so a keyless run pays the 30-second 429 sleep once, not once per DOI. A single DOI behaves exactly as before.
-
-A usage error (for example `PAPERS_MAILTO` unset) prints `{"status": "config_error", "reason": "...", "agent_next": "notify_human; stop_fetch"}` on stdout and exits 1, so stdout is always JSON.
-
-Statuses:
+## Statuses
 
 | Status | Meaning |
 |---|---|
 | `ok` | Full text on disk. Read the file at `read`. |
 | `no_oa` | No open-access copy found. `tried` lists the resolvers. `unpaywall_blocked` means the publisher PDF refused a script. |
 | `unreadable_pdf` | Got a PDF, no extractable text (likely a scan). |
-| `retry` | Unpaywall API unreachable and nothing else hit. Try later. |
+| `retry` | Unpaywall was unreachable and nothing else hit. Try later. |
 | `no_doi` | Title did not resolve to a DOI. |
 | `config_error` | Bad setup, such as no `PAPERS_MAILTO`. `reason` says what to fix. |
 
-Unpaywall tries every open location it knows, repository copies (PMC etc.) before publisher sites. A failed download or a PDF with no extractable text moves on to the next location, then the next resolver, rather than stopping.
+A usage error always prints JSON on stdout (`status: "config_error"`) and exits 1.
 
-Title lookup skips Crossref `posted-content` (preprints, Nature Precedings) and reviewer reports, and prefers a `journal-article`. Give a DOI when you have one — titles are fuzzy.
+## Optional keys
 
-`papers status` prints one JSON object, exits 0, touches no network:
+Neither is required.
 
-- `cached`: count of cached papers (`text.txt` ≥ 500 chars) and total `chars`
-- `unreadable`: count of paper dirs with PDF but text under the floor
-- `cache_root`: cache directory
-- `mailto_set` / `s2_key_set` / `core_key_set`
+- `SEMANTIC_SCHOLAR_API_KEY` — higher Semantic Scholar rate limits. Without a key, a 429 skips that resolver for the rest of the process. Never commit keys.
+- `CORE_API_KEY` — adds [CORE](https://core.ac.uk/services/api) as the last resolver. Register free at https://core.ac.uk/api-keys/register. Without a key CORE is skipped.
 
-Cache lives in `%USERPROFILE%\.paperfetch` (or `~/.paperfetch`).
+A batch (`papers get` with several inputs, or `papers get -`) keeps those skip/error memos for the whole run, so a keyless Semantic Scholar 429 sleeps once, not once per DOI.
+
+## What this will not do
+
+- Fetch a paywalled publisher PDF
+- Log in to a publisher, library, or campus proxy
+- OCR a scanned PDF that has no text layer
+- Invent a DOI for a title Crossref does not know
+
+Give a DOI when you have one.
 
 ## Tests
 
@@ -99,3 +158,7 @@ python -m pytest -q
 ```
 
 Offline only. No network, no keys.
+
+## License
+
+MIT.

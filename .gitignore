@@ -16,3 +16,6 @@ uv.lock
 
 # Public-repo extras moved off GitHub
 /archive/
+
+# Archify visual-check captures stay local
+/docs/pipeline.visual-check.*
