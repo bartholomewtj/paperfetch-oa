@@ -78,9 +78,9 @@ papers status
 
 ## How it works
 
-![How papers get works](docs/pipeline.png)
+[![How papers get works](docs/pipeline.png)](https://bartholomewtj.github.io/paperfetch-oa/pipeline.html)
 
-Open [`docs/pipeline.html`](docs/pipeline.html) after a clone for the interactive version (pan, zoom, three views).
+*[Open the interactive diagram](https://bartholomewtj.github.io/paperfetch-oa/pipeline.html)* — pan, zoom, and three views: DOI to text.txt, OA ladder, and failure exits.
 
 1. **Identify.** A `10.…` token is a DOI. Anything else goes to Crossref. Missing `PAPERS_MAILTO` is `config_error`.
 2. **Cache.** Hits live under `~/.paperfetch` (Windows: `%USERPROFILE%\.paperfetch`). A readable `text.txt` already there is returned as `ok` with no download.
