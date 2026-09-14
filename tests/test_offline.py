@@ -1188,6 +1188,47 @@ def test_arxiv_preprint_ok(home, capsys, monkeypatch):
     assert urls_called == ["https://arxiv.org/pdf/2301.00001.pdf"]
 
 
+def _preprint_403(monkeypatch):
+    import papers.preprints
+
+    def fail_403(url, dest, mailto):
+        raise FetchError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr("papers.preprints.download_pdf", fail_403)
+    monkeypatch.setattr("papers.preprints.time.sleep", lambda s: None)
+    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "Blocked preprint", "ChemRxiv", 2024, None, None),
+    )
+
+
+def test_chemrxiv_403_sets_browser_urls(home, capsys, monkeypatch):
+    doi = "10.26434/chemrxiv-2024-abcd1"
+    _preprint_403(monkeypatch)
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert rec["browser_urls"] == [f"https://doi.org/{doi}"]
+    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
+    assert "preprint" in rec["tried"].split(",")
+
+
+def test_preprints_org_403_sets_browser_urls(home, capsys, monkeypatch):
+    doi = "10.20944/preprints202401.0123.v1"
+    _preprint_403(monkeypatch)
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert rec["browser_urls"] == [
+        "https://www.preprints.org/manuscript/202401.0123/v1/download"
+    ]
+    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
+    assert "preprint" in rec["tried"].split(",")
+
+
 def test_arxiv_rate_limit(monkeypatch):
     import time
     import papers.preprints
@@ -1314,7 +1355,7 @@ def test_title_argument_crossref_skips_posted_content(home, capsys, monkeypatch)
 
 
 def test_title_argument_crossref_prefers_journal_article(home, capsys, monkeypatch):
-    seed_ok(PLOS)
+    """No exact title match → no_doi; do not take a random journal-article."""
     cr = {
         "message": {
             "items": [
@@ -1330,8 +1371,9 @@ def test_title_argument_crossref_prefers_journal_article(home, capsys, monkeypat
         lambda req, timeout=None: io.BytesIO(json.dumps(cr).encode()),
     )
     code, out, _ = run(capsys, ["get", "not an exact title at all"])
-    assert code == 0
-    assert json.loads(out)["doi"] == PLOS
+    assert code == 1
+    rec = json.loads(out)
+    assert rec == {"status": "no_doi", "agent_next": "notify_human"}
 
 
 def test_title_argument_crossref_exact_title_beats_rank(home, capsys, monkeypatch):

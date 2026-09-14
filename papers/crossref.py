@@ -52,15 +52,13 @@ def _rank(it: dict) -> tuple[int, int, int]:
 
 
 def _pick_doi(items: list, query: str) -> str | None:
-    """Exact (normalised) title match wins; otherwise a journal-article.
+    """Return a DOI only from the exact (normalised) title pool.
 
     Several Crossref hits can share one title (a preprint plus the journal
-    version). Rank those instead of taking the first.
+    version). Rank those instead of taking the first. No exact match → None.
     """
     q = _norm(query)
     exact: list[dict] = []
-    journal: list[dict] = []
-    other: list[dict] = []
     for it in items:
         if not isinstance(it, dict) or it.get("type") in SKIP_TYPES:
             continue
@@ -70,14 +68,9 @@ def _pick_doi(items: list, query: str) -> str | None:
         titles = it.get("title") or []
         if any(_norm(x) == q for x in titles if isinstance(x, str)):
             exact.append(it)
-        elif it.get("type") == "journal-article":
-            journal.append(it)
-        else:
-            other.append(it)
-    pool = exact or journal or other
-    if not pool:
+    if not exact:
         return None
-    return max(pool, key=_rank).get("DOI")
+    return max(exact, key=_rank).get("DOI")
 
 
 def resolve_title(title: str, mailto: str) -> str | None:

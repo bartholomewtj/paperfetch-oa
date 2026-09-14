@@ -27,7 +27,7 @@ from papers.europepmc import resolve as europepmc_resolve
 from papers.extract import write_text
 from papers.fetch import FetchError, download_pdf
 from papers.openalex import resolve as openalex_resolve
-from papers.preprints import resolve as preprint_resolve
+from papers.preprints import resolve as preprint_resolve, shortcut_urls
 from papers.semanticscholar import resolve as s2_resolve
 from papers.unpaywall import LookupError, lookup
 from papers.uspmc import resolve as uspmc_resolve
@@ -60,14 +60,23 @@ def _ok_record(doi: str, meta: dict, n_chars: int) -> dict:
     }
 
 
-def _no_oa_record(doi: str, title: str, tried: str) -> dict:
-    return {
+def _no_oa_record(
+    doi: str,
+    title: str,
+    tried: str,
+    browser_urls: list[str] | None = None,
+) -> dict:
+    rec = {
         "status": "no_oa",
         "doi": doi,
         "title": title or "",
         "tried": tried,
         "agent_next": "stop_fetch; abstract_only",
     }
+    if browser_urls:
+        rec["browser_urls"] = browser_urls
+        rec["agent_next"] = "try_browser_pdf; abstract_only"
+    return rec
 
 
 def _unreadable_record(doi: str, n_chars: int, title: str = "") -> dict:
@@ -218,8 +227,13 @@ def get_paper(raw: str) -> tuple[dict, int]:
         return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
     if pr_res == "unreadable":
         return _unreadable_record(doi, text_chars(doi), (read_meta(doi).get("title") or title)), 2
-    if pr_res in ("miss", False):
+    browser_urls: list[str] = []
+    if pr_res in ("miss", False, "blocked"):
         tried.append("preprint")
+        if pr_res == "blocked":
+            for url in shortcut_urls(doi):
+                if url not in browser_urls:
+                    browser_urls.append(url)
 
     core_res = core_resolve(doi, mailto)
     if core_res in ("hit", True):
@@ -234,7 +248,7 @@ def get_paper(raw: str) -> tuple[dict, int]:
         return _retry_record(doi), 2
 
     tried_str = ",".join(tried)
-    return _no_oa_record(doi, title, tried_str), 2
+    return _no_oa_record(doi, title, tried_str, browser_urls=browser_urls or None), 2
 
 
 def _get_inputs(items: list[str]) -> list[str]:
