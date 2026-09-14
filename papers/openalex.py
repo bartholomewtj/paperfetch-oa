@@ -16,6 +16,7 @@ from papers.cache import (
 )
 from papers.extract import write_text
 from papers.fetch import TIMEOUT_SEC, download_pdf, user_agent
+from papers.landing import download_from_landing, is_publisher_url
 
 
 def _is_paid_cdn(url: str) -> bool:
@@ -50,6 +51,32 @@ def _pdf_candidates(data: dict) -> list[tuple[str, dict]]:
     return cands
 
 
+def _landing_urls(data: dict) -> list[str]:
+    locs: list[dict] = []
+    best = data.get("best_oa_location")
+    if isinstance(best, dict):
+        locs.append(best)
+    extra = data.get("locations")
+    if isinstance(extra, list):
+        locs.extend(loc for loc in extra if isinstance(loc, dict))
+    out: list[str] = []
+    seen: set[str] = set()
+    for loc in locs:
+        if loc.get("is_oa") is False:
+            continue
+        land = loc.get("landing_page_url")
+        if not land or not isinstance(land, str):
+            continue
+        land = land.strip()
+        if not land.startswith("http") or land in seen or is_publisher_url(land):
+            continue
+        if loc.get("pdf_url"):
+            continue
+        seen.add(land)
+        out.append(land)
+    return out
+
+
 def resolve(doi: str, mailto: str) -> str:
     """Resolve a DOI via OpenAlex. Returns 'hit', 'miss', or 'unreadable'."""
     quoted_doi = urllib.parse.quote(doi, safe="")
@@ -69,7 +96,8 @@ def resolve(doi: str, mailto: str) -> str:
         return "miss"
 
     cands = _pdf_candidates(data)
-    if not cands:
+    landings = _landing_urls(data)
+    if not cands and not landings:
         return "miss"
 
     dest_pdf = pdf_path(doi)
@@ -105,6 +133,30 @@ def resolve(doi: str, mailto: str) -> str:
                     "resolver": "openalex",
                     "version": loc.get("version"),
                     "license": loc.get("license"),
+                    "journal": journal,
+                    "year": year,
+                    "text_chars": n,
+                },
+            )
+            if n >= TEXT_FLOOR:
+                return "hit"
+            return "unreadable"
+        except Exception:
+            _cleanup()
+            continue
+    for land in landings:
+        try:
+            if not download_from_landing(land, dest_pdf, mailto):
+                _cleanup()
+                continue
+            n = write_text(dest_pdf, dest_txt)
+            write_meta(
+                doi,
+                {
+                    "title": title,
+                    "resolver": "openalex",
+                    "version": None,
+                    "license": None,
                     "journal": journal,
                     "year": year,
                     "text_chars": n,

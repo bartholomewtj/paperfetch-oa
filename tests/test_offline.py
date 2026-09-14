@@ -132,6 +132,16 @@ def core_default_skip(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def related_default_skip(monkeypatch):
+    monkeypatch.setattr("papers.cli.related_resolve", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def openaire_default_skip(monkeypatch):
+    monkeypatch.setattr("papers.cli.openaire_resolve", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def reset_s2_process_skip():
     import papers.semanticscholar as s2
 
@@ -1188,47 +1198,6 @@ def test_arxiv_preprint_ok(home, capsys, monkeypatch):
     assert urls_called == ["https://arxiv.org/pdf/2301.00001.pdf"]
 
 
-def _preprint_403(monkeypatch):
-    import papers.preprints
-
-    def fail_403(url, dest, mailto):
-        raise FetchError("HTTP Error 403: Forbidden")
-
-    monkeypatch.setattr("papers.preprints.download_pdf", fail_403)
-    monkeypatch.setattr("papers.preprints.time.sleep", lambda s: None)
-    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
-    monkeypatch.setattr(
-        "papers.cli.lookup",
-        lambda d, mailto: Lookup(False, None, "Blocked preprint", "ChemRxiv", 2024, None, None),
-    )
-
-
-def test_chemrxiv_403_sets_browser_urls(home, capsys, monkeypatch):
-    doi = "10.26434/chemrxiv-2024-abcd1"
-    _preprint_403(monkeypatch)
-    code, out, _ = run(capsys, ["get", doi])
-    rec = json.loads(out)
-    assert code == 2
-    assert rec["status"] == "no_oa"
-    assert rec["browser_urls"] == [f"https://doi.org/{doi}"]
-    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
-    assert "preprint" in rec["tried"].split(",")
-
-
-def test_preprints_org_403_sets_browser_urls(home, capsys, monkeypatch):
-    doi = "10.20944/preprints202401.0123.v1"
-    _preprint_403(monkeypatch)
-    code, out, _ = run(capsys, ["get", doi])
-    rec = json.loads(out)
-    assert code == 2
-    assert rec["status"] == "no_oa"
-    assert rec["browser_urls"] == [
-        "https://www.preprints.org/manuscript/202401.0123/v1/download"
-    ]
-    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
-    assert "preprint" in rec["tried"].split(",")
-
-
 def test_arxiv_rate_limit(monkeypatch):
     import time
     import papers.preprints
@@ -2242,3 +2211,380 @@ def test_get_batch_s2_skip_holds_across_batch(home, capsys, monkeypatch):
     assert sleeps == [30]  # one sleep for the whole batch, not one per DOI
     assert len(calls) == 2  # first try + retry on DOI one; DOI two never hits S2
     assert papers.semanticscholar._skip_for_process is True
+
+
+def test_landing_pdf_urls_from_html():
+    from papers.landing import pdf_urls_from_html, is_publisher_url
+
+    html = """
+    <html><head>
+    <meta name="citation_pdf_url" content="/bitstream/10281/285927/2/paper.pdf">
+    </head><body>
+    <a href="https://boa.unimib.it/bitstream/10281/285927/2/Meta.pdf">PDF</a>
+    <a href="https://www.nature.com/articles/ng.pdf">publisher</a>
+    </body></html>
+    """
+    urls = pdf_urls_from_html(html, "https://boa.unimib.it/handle/10281/285927")
+    assert "https://boa.unimib.it/bitstream/10281/285927/2/paper.pdf" in urls
+    assert "https://boa.unimib.it/bitstream/10281/285927/2/Meta.pdf" in urls
+    assert not any("nature.com" in u for u in urls)
+    assert is_publisher_url("https://academic.oup.com/hmg/article-pdf/x.pdf")
+    assert not is_publisher_url("https://boa.unimib.it/bitstream/x.pdf")
+
+
+def test_unpaywall_repository_landing_used(home, capsys, monkeypatch):
+    from papers.unpaywall import Lookup
+
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(
+            False,
+            None,
+            "Green OA",
+            "Neurosci Biobehav Rev",
+            2020,
+            None,
+            None,
+            locations=[],
+            landings=["https://hdl.handle.net/10281/285927"],
+        ),
+    )
+
+    def fake_landing(url, dest, mailto):
+        assert url == "https://hdl.handle.net/10281/285927"
+        write_pdf(dest, "Bicocca repository readable manuscript " * 30)
+        return True
+
+    monkeypatch.setattr("papers.cli.download_from_landing", fake_landing)
+    code, out, _ = run(capsys, ["get", CLOSED])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "unpaywall"
+
+
+def test_unpaywall_publisher_block_sets_browser_urls(home, capsys, monkeypatch):
+    from papers.fetch import FetchError
+    from papers.unpaywall import Lookup
+
+    pub = "https://academic.oup.com/hmg/article-pdf/x.pdf"
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(
+            True, pub, "HMG paper", "Human Molecular Genetics", 2021, None, "publishedVersion",
+            locations=[(pub, None, "publishedVersion")],
+        ),
+    )
+    monkeypatch.setattr("papers.cli.download_pdf", lambda *a, **k: (_ for _ in ()).throw(FetchError("not a PDF")))
+    code, out, _ = run(capsys, ["get", CLOSED])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert rec["browser_urls"] == [pub]
+    assert "try_browser_pdf" in rec["agent_next"]
+    assert rec["tried"] == "europepmc,unpaywall_blocked"
+
+
+def test_openaire_hit_ok(home, capsys, monkeypatch):
+    import papers.openaire
+    from papers.cache import read_meta
+
+    payload = {
+        "results": [
+            {
+                "mainTitle": "Bilingual language processing",
+                "instances": [
+                    {
+                        "accessRight": {"label": "CLOSED"},
+                        "urls": ["https://doi.org/10.1016/j.neubiorev.2019.12.014"],
+                    },
+                    {
+                        "accessRight": {"label": "OPEN"},
+                        "urls": [
+                            "https://boa.unimib.it/bitstream/10281/285927/2/MetaAnalysis_Manuscript_Final.pdf"
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: io.BytesIO(json.dumps(payload).encode()))
+    monkeypatch.setattr(
+        "papers.openaire.download_pdf",
+        lambda url, dest, mailto: write_pdf(dest, "OpenAIRE repository readable paper content " * 30),
+    )
+    monkeypatch.setattr("papers.cli.openaire_resolve", papers.openaire.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Closed paper", "JAMA", 2018, None, None),
+    )
+    code, out, _ = run(capsys, ["get", CLOSED])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "openaire"
+    assert read_meta(CLOSED)["resolver"] == "openaire"
+
+
+def test_socarxiv_preprint_ok(home, capsys, monkeypatch):
+    import papers.preprints
+
+    doi = "10.31235/osf.io/abcd1"
+    urls_called = []
+
+    def fake_download(url, dest, mailto):
+        urls_called.append(url)
+        write_pdf(dest, "SocArXiv preprint readable content " * 30)
+
+    monkeypatch.setattr("papers.preprints.download_pdf", fake_download)
+    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "Soc paper", "SocArXiv", 2024, None, None),
+    )
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "preprint"
+    assert urls_called == ["https://osf.io/abcd1/download"]
+
+
+def test_researchsquare_preprint_ok(home, capsys, monkeypatch):
+    import papers.preprints
+
+    doi = "10.21203/rs.3.rs-1234567/v1"
+    urls_called = []
+
+    def fake_download(url, dest, mailto):
+        urls_called.append(url)
+        write_pdf(dest, "Research Square preprint readable content " * 30)
+
+    monkeypatch.setattr("papers.preprints.download_pdf", fake_download)
+    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "RS paper", "Research Square", 2024, None, None),
+    )
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["resolver"] == "preprint"
+    assert urls_called == ["https://www.researchsquare.com/article/rs-1234567/v1.pdf"]
+
+
+def test_preprints_org_ok(home, capsys, monkeypatch):
+    import papers.preprints
+
+    doi = "10.20944/preprints202401.0123.v1"
+    urls_called = []
+
+    def fake_download(url, dest, mailto):
+        urls_called.append(url)
+        write_pdf(dest, "MDPI preprint readable content " * 30)
+
+    monkeypatch.setattr("papers.preprints.download_pdf", fake_download)
+    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "MDPI preprint", "Preprints", 2024, None, None),
+    )
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["resolver"] == "preprint"
+    assert urls_called == ["https://www.preprints.org/manuscript/202401.0123/v1/download"]
+
+
+def _preprint_403(monkeypatch):
+    import papers.preprints
+
+    def fail_403(url, dest, mailto):
+        raise FetchError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr("papers.preprints.download_pdf", fail_403)
+    monkeypatch.setattr("papers.preprints.download_from_landing", lambda *a, **k: False)
+    monkeypatch.setattr("papers.preprints.time.sleep", lambda s: None)
+    monkeypatch.setattr("papers.cli.preprint_resolve", papers.preprints.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda d, mailto: Lookup(False, None, "Blocked preprint", "ChemRxiv", 2024, None, None),
+    )
+
+
+def test_chemrxiv_403_sets_browser_urls(home, capsys, monkeypatch):
+    doi = "10.26434/chemrxiv-2024-abcd1"
+    _preprint_403(monkeypatch)
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert rec["browser_urls"] == [f"https://doi.org/{doi}"]
+    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
+    assert "preprint" in rec["tried"].split(",")
+
+
+def test_preprints_org_403_sets_browser_urls(home, capsys, monkeypatch):
+    doi = "10.20944/preprints202401.0123.v1"
+    _preprint_403(monkeypatch)
+    code, out, _ = run(capsys, ["get", doi])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert rec["browser_urls"] == [
+        "https://www.preprints.org/manuscript/202401.0123/v1/download"
+    ]
+    assert rec["tried"].startswith("europepmc,unpaywall,preprint")
+    assert "preprint" in rec["tried"].split(",")
+
+
+def test_s2_skips_closed_pdf_uses_arxiv(home, capsys, monkeypatch):
+    import papers.semanticscholar
+    from papers.cache import read_meta
+
+    payload = {
+        "title": "A paper with an arXiv copy",
+        "externalIds": {"ArXiv": "2301.00001", "DOI": PLOS},
+        "openAccessPdf": {"url": "https://other-journal.example/wrong.pdf", "status": "CLOSED"},
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: io.BytesIO(json.dumps(payload).encode()))
+    urls_called = []
+
+    def fake_download(url, dest, mailto):
+        urls_called.append(url)
+        write_pdf(dest, "arXiv copy readable paper content " * 30)
+
+    monkeypatch.setattr("papers.semanticscholar.download_pdf", fake_download)
+    monkeypatch.setattr("papers.cli.s2_resolve", papers.semanticscholar.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Closed paper", "JAMA", 2018, None, None),
+    )
+    code, out, _ = run(capsys, ["get", PLOS])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "semanticscholar"
+    assert urls_called == ["https://arxiv.org/pdf/2301.00001.pdf"]
+    assert read_meta(PLOS)["resolver"] == "semanticscholar"
+
+
+def test_related_preprint_from_crossref(home, capsys, monkeypatch):
+    import papers.related
+
+    monkeypatch.setattr("papers.related.preprint_of", lambda doi, mailto: "10.1101/2024.01.01.123456")
+    monkeypatch.setattr("papers.cli.related_resolve", papers.related.resolve)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Journal version", "Cell", 2024, None, None),
+    )
+
+    def fake_ok(doi, mailto):
+        body = "bioRxiv preprint of the journal article " * 30
+        write_pdf(pdf_path(doi), body)
+        text_path(doi).parent.mkdir(parents=True, exist_ok=True)
+        text_path(doi).write_text(body, encoding="utf-8")
+        write_meta(doi, {"title": "Preprint", "resolver": "biorxiv", "text_chars": len(body)})
+        return True
+
+    monkeypatch.setattr("papers.related.biorxiv_resolve", fake_ok)
+    code, out, _ = run(capsys, ["get", CLOSED])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "biorxiv"
+
+
+def test_uspmc_bioc_when_html_is_shell(home, capsys, monkeypatch):
+    import papers.uspmc
+
+    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
+    monkeypatch.setattr("papers.cli.lookup", lambda *a, **k: (_ for _ in ()).throw(AssertionError("unpaywall")))
+
+    bioc = {
+        "documents": [
+            {
+                "passages": [
+                    {"infons": {"section_type": "TITLE"}, "text": "Aneuploidy-selective compounds"},
+                    {
+                        "infons": {"section_type": "ABSTRACT"},
+                        "text": "Aneuploidy is a hallmark of cancer. " * 20,
+                    },
+                    {"infons": {"section_type": "REF"}, "text": "Should be dropped"},
+                ]
+            }
+        ]
+    }
+
+    def fake_fetch_bytes(url, mailto):
+        if "idconv" in url:
+            return (FIXTURES / "idconv_hit.json").read_bytes()
+        if url.startswith(papers.uspmc.AWS_BUCKET):
+            return (
+                b'<?xml version="1.0"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                b"<KeyCount>0</KeyCount></ListBucketResult>"
+            )
+        if url.startswith("https://pmc.ncbi.nlm.nih.gov/articles/"):
+            return b"<html><body><p>Enable JavaScript</p></body></html>"
+        if "BioC_json" in url:
+            return json.dumps(bioc).encode()
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(
+        "papers.uspmc.download_pdf",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no pdf")),
+    )
+    code, out, _ = run(capsys, ["get", PLOS])
+    rec = json.loads(out)
+    assert code == 0
+    assert rec["status"] == "ok"
+    assert rec["resolver"] == "uspmc"
+    text = text_path(PLOS).read_text(encoding="utf-8")
+    assert "Aneuploidy is a hallmark of cancer" in text
+    assert "Should be dropped" not in text
+
+
+def test_uspmc_sends_ncbi_api_key(home, capsys, monkeypatch):
+    import papers.uspmc
+
+    monkeypatch.setenv("NCBI_API_KEY", "ncbi-test-key")
+    monkeypatch.setattr("papers.cli.uspmc_resolve", papers.uspmc.resolve)
+    seen = []
+
+    def fake_fetch_bytes(url, mailto):
+        seen.append(url)
+        if "idconv" in url:
+            assert "api_key=ncbi-test-key" in url
+            return (FIXTURES / "idconv_miss.json").read_bytes()
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("papers.uspmc.fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(
+        "papers.cli.lookup",
+        lambda doi, mailto: Lookup(False, None, "Closed paper", "JAMA", 2018, None, None),
+    )
+    code, out, _ = run(capsys, ["get", CLOSED])
+    rec = json.loads(out)
+    assert code == 2
+    assert rec["status"] == "no_oa"
+    assert any("idconv" in u for u in seen)
+
+
+def test_crossref_preprint_of(monkeypatch):
+    from papers.crossref import preprint_of
+
+    payload = {
+        "message": {
+            "relation": {
+                "has-preprint": [{"id-type": "doi", "id": "https://doi.org/10.1101/2024.01.01.123456"}]
+            }
+        }
+    }
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=None: io.BytesIO(json.dumps(payload).encode()),
+    )
+    assert preprint_of("10.1016/j.cell.2024.01.001", "t@example.test") == "10.1101/2024.01.01.123456"
+    assert preprint_of("", "t@example.test") is None

@@ -73,6 +73,46 @@ def _pick_doi(items: list, query: str) -> str | None:
     return max(exact, key=_rank).get("DOI")
 
 
+def preprint_of(doi: str, mailto: str) -> str | None:
+    """DOI of a preprint Crossref links from this work, or None."""
+    try:
+        d = (doi or "").strip()
+        if not d:
+            return None
+        url = "https://api.crossref.org/works/" + urllib.parse.quote(d)
+        url = url + "?" + urllib.parse.urlencode({"mailto": mailto})
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": user_agent(mailto)},
+        )
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            return None
+        msg = data.get("message")
+        if not isinstance(msg, dict):
+            return None
+        rel = msg.get("relation")
+        if not isinstance(rel, dict):
+            return None
+        items = rel.get("has-preprint")
+        if not isinstance(items, list):
+            return None
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            raw = it.get("id") or it.get("DOI") or ""
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            raw = raw.strip()
+            raw = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", raw, flags=re.IGNORECASE)
+            if raw.lower().startswith("10."):
+                return normalize_doi(raw)
+        return None
+    except Exception:
+        return None
+
+
 def resolve_title(title: str, mailto: str) -> str | None:
     """GET Crossref works?query.bibliographic=&rows=10&mailto=. Return normalised DOI or None."""
     try:

@@ -30,6 +30,8 @@ class Lookup:
     version: str | None
     # (url, license, version) for every OA PDF Unpaywall knows, best first.
     locations: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # Repository landing pages with no url_for_pdf (handle, eprints, DSpace).
+    landings: list[str] = field(default_factory=list)
 
     @property
     def pdf_urls(self) -> list[str]:
@@ -66,6 +68,27 @@ def _locations(payload: dict) -> list[tuple[str, str | None, str | None]]:
     return repo + pub
 
 
+def _landings(payload: dict, pdf_urls: set[str]) -> list[str]:
+    """Repository landing pages Unpaywall has no PDF URL for."""
+    locs = payload.get("oa_locations") or []
+    if not isinstance(locs, list):
+        locs = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for loc in locs:
+        if not isinstance(loc, dict):
+            continue
+        if loc.get("host_type") != "repository":
+            continue
+        url = loc.get("url")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        url = url.strip()
+        if not url.startswith("http") or url in pdf_urls or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out
 
 
 def _error_path() -> Path:
@@ -140,7 +163,7 @@ def lookup(doi: str, mailto: str) -> Lookup:
     pdf_url = locations[0][0] if locations else None
     year = _year(payload)
     return Lookup(
-        is_oa=bool(payload.get("is_oa") and pdf_url),
+        is_oa=bool(payload.get("is_oa") and (pdf_url or False)),
         pdf_url=pdf_url,
         title=str(payload.get("title") or "").strip(),
         journal=str(payload.get("journal_name") or "").strip(),
@@ -148,6 +171,7 @@ def lookup(doi: str, mailto: str) -> Lookup:
         license=locations[0][1] if locations else (loc.get("license") or None),
         version=locations[0][2] if locations else (loc.get("version") or None),
         locations=locations,
+        landings=_landings(payload, {u for u, _, _ in locations}),
     )
 
 

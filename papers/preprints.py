@@ -1,4 +1,4 @@
-"""Preprint shortcut resolver for bioRxiv, medRxiv, PsyArXiv, and arXiv."""
+"""Preprint shortcut resolver for bioRxiv, medRxiv, OSF, arXiv, and others."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from papers.cache import (
 )
 from papers.extract import write_text
 from papers.fetch import FetchError, download_pdf
+from papers.landing import download_from_landing
 
 _last_arxiv_request: float = 0.0
 ARXIV_GAP_SEC: float = 3.0
@@ -46,20 +47,46 @@ def _is_http_403(exc: BaseException) -> bool:
     return False
 
 
-def shortcut_urls(doi: str) -> list[str]:
-    """Reconstructable PDF URLs for ChemRxiv / preprints.org, else []."""
+def _targets(doi: str) -> tuple[list[str], bool] | None:
+    """(urls, is_arxiv) if the DOI matches a preprint host, else None."""
+    if re.match(r"^10\.1101/\d", doi):
+        return [
+            f"https://www.biorxiv.org/content/{doi}v1.full.pdf",
+            f"https://www.medrxiv.org/content/{doi}v1.full.pdf",
+        ], False
+    if re.match(r"^10\.312(19|22|24|34|35|36)/osf\.io/", doi) or doi.startswith(
+        "10.35542/osf.io/"
+    ):
+        id_ = doi.split("/osf.io/", 1)[-1].strip()
+        return ([f"https://osf.io/{id_}/download"] if id_ else []), False
+    if doi.startswith("10.48550/arxiv."):
+        id_ = doi[len("10.48550/arxiv.") :].strip()
+        return ([f"https://arxiv.org/pdf/{id_}.pdf"] if id_ else []), True
+    if doi.startswith("10.21203/"):
+        rest = doi[len("10.21203/") :].strip()
+        m = re.search(r"(rs-\d+)(?:/v(\d+))?", rest)
+        if not m:
+            return [], False
+        ver = m.group(2) or "1"
+        return [f"https://www.researchsquare.com/article/{m.group(1)}/v{ver}.pdf"], False
     if doi.startswith("10.26434/chemrxiv"):
-        return [f"https://doi.org/{doi}"]
+        return [f"https://doi.org/{doi}"], False
     if doi.startswith("10.20944/preprints"):
         rest = doi[len("10.20944/preprints") :].strip()
         m = re.match(r"(\d{6}\.\d+)(?:\.v(\d+))?", rest)
         if not m:
-            return []
+            return [], False
         ver = m.group(2) or "1"
         return [
             f"https://www.preprints.org/manuscript/{m.group(1)}/v{ver}/download"
-        ]
-    return []
+        ], False
+    return None
+
+
+def shortcut_urls(doi: str) -> list[str]:
+    """Reconstructable PDF URLs for a matching preprint DOI, else []."""
+    got = _targets(doi)
+    return list(got[0]) if got else []
 
 
 def resolve(doi: str, mailto: str) -> str | None:
@@ -72,34 +99,10 @@ def resolve(doi: str, mailto: str) -> str | None:
         'miss' - prefix matched but downloads failed (or empty identifier)
         None - DOI prefix did not match any preprint server
     """
-    matched = False
-    urls: list[str] = []
-    is_arxiv = False
-
-    if re.match(r"^10\.1101/\d", doi):
-        matched = True
-        urls = [
-            f"https://www.biorxiv.org/content/{doi}v1.full.pdf",
-            f"https://www.medrxiv.org/content/{doi}v1.full.pdf",
-        ]
-    elif doi.startswith("10.31234/osf.io/"):
-        matched = True
-        id_ = doi[len("10.31234/osf.io/") :].strip()
-        if id_:
-            urls = [f"https://osf.io/{id_}/download"]
-    elif doi.startswith("10.48550/arxiv."):
-        matched = True
-        id_ = doi[len("10.48550/arxiv.") :].strip()
-        if id_:
-            is_arxiv = True
-            urls = [f"https://arxiv.org/pdf/{id_}.pdf"]
-    elif doi.startswith(_BLOCK_PREFIXES):
-        matched = True
-        urls = shortcut_urls(doi)
-
-    if not matched:
+    got = _targets(doi)
+    if got is None:
         return None
-
+    urls, is_arxiv = got
     if not urls:
         return "miss"
 
@@ -145,10 +148,12 @@ def _try_urls(
         try:
             download_pdf(url, dest_pdf, mailto)
         except FetchError as exc:
-            _drop(dest_pdf)
-            if not _is_http_403(exc):
-                all_403 = False
-            continue
+            url_403 = _is_http_403(exc)
+            if is_arxiv or not download_from_landing(url, dest_pdf, mailto):
+                _drop(dest_pdf)
+                if not url_403:
+                    all_403 = False
+                continue
         except Exception:
             _drop(dest_pdf)
             all_403 = False
