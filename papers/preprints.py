@@ -19,6 +19,9 @@ ARXIV_GAP_SEC: float = 3.0
 # bioRxiv/medRxiv sit behind Cloudflare and answer 403 intermittently for the
 # same URL; one retry roughly doubles the hit rate.
 RETRY_GAP_SEC: float = 2.0
+# These hosts 403 the script UA; the constructed URL still belongs in
+# browser_urls so a real browser can try it.
+_BLOCK_PREFIXES = ("10.26434/chemrxiv", "10.20944/preprints")
 
 
 def _rate_limit_arxiv() -> None:
@@ -30,12 +33,42 @@ def _rate_limit_arxiv() -> None:
     _last_arxiv_request = time.time()
 
 
+def _is_http_403(exc: BaseException) -> bool:
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, "code", None) == 403:
+            return True
+        if "HTTP Error 403" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def shortcut_urls(doi: str) -> list[str]:
+    """Reconstructable PDF URLs for ChemRxiv / preprints.org, else []."""
+    if doi.startswith("10.26434/chemrxiv"):
+        return [f"https://doi.org/{doi}"]
+    if doi.startswith("10.20944/preprints"):
+        rest = doi[len("10.20944/preprints") :].strip()
+        m = re.match(r"(\d{6}\.\d+)(?:\.v(\d+))?", rest)
+        if not m:
+            return []
+        ver = m.group(2) or "1"
+        return [
+            f"https://www.preprints.org/manuscript/{m.group(1)}/v{ver}/download"
+        ]
+    return []
+
+
 def resolve(doi: str, mailto: str) -> str | None:
     """Resolve preprint DOIs directly.
 
     Returns:
         'hit' - PDF downloaded and text >= TEXT_FLOOR
         'unreadable' - PDF downloaded but text < TEXT_FLOOR
+        'blocked' - ChemRxiv / preprints.org, every URL HTTP 403
         'miss' - prefix matched but downloads failed (or empty identifier)
         None - DOI prefix did not match any preprint server
     """
@@ -60,6 +93,9 @@ def resolve(doi: str, mailto: str) -> str | None:
         if id_:
             is_arxiv = True
             urls = [f"https://arxiv.org/pdf/{id_}.pdf"]
+    elif doi.startswith(_BLOCK_PREFIXES):
+        matched = True
+        urls = shortcut_urls(doi)
 
     if not matched:
         return None
@@ -74,11 +110,15 @@ def resolve(doi: str, mailto: str) -> str | None:
     # on the wrong host before trying the other one burns Cloudflare budget
     # and gets the right host blocked too.
     result = _try_urls(doi, urls, dest_pdf, dest_txt, mailto, is_arxiv)
-    if result is not None:
+    if result in ("hit", "unreadable"):
         return result
     time.sleep(RETRY_GAP_SEC)
     result = _try_urls(doi, urls, dest_pdf, dest_txt, mailto, is_arxiv)
-    return result if result is not None else "miss"
+    if result in ("hit", "unreadable"):
+        return result
+    if result == "blocked" and doi.startswith(_BLOCK_PREFIXES):
+        return "blocked"
+    return "miss"
 
 
 def _drop(path) -> None:
@@ -97,17 +137,21 @@ def _try_urls(
     mailto: str,
     is_arxiv: bool,
 ) -> str | None:
-    """Try each URL once. Return 'hit'/'unreadable', or None if all failed."""
+    """Try each URL once. Return 'hit'/'unreadable'/'blocked', or None."""
+    all_403 = True
     for url in urls:
         if is_arxiv:
             _rate_limit_arxiv()
         try:
             download_pdf(url, dest_pdf, mailto)
-        except FetchError:
+        except FetchError as exc:
             _drop(dest_pdf)
+            if not _is_http_403(exc):
+                all_403 = False
             continue
         except Exception:
             _drop(dest_pdf)
+            all_403 = False
             continue
 
         try:
@@ -127,5 +171,6 @@ def _try_urls(
             return "unreadable"
         except Exception:
             _drop(dest_pdf)
+            all_403 = False
             continue
-    return None
+    return "blocked" if all_403 else None
