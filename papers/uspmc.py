@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -13,7 +14,9 @@ from papers.fetch import download_pdf, fetch_bytes
 
 
 AWS_BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com/"
+BIOC_URL = "https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json/{id}/unicode"
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+_BIOC_SKIP = re.compile(r"ref|ack|fn$|table|fig|footnote", re.IGNORECASE)
 
 
 def aws_pdf_key(listing_xml: bytes, pmcid: str) -> str | None:
@@ -81,14 +84,16 @@ def resolve(doi: str, mailto: str) -> bool:
 
     try:
         # Step A: ID Converter
-        params = urllib.parse.urlencode(
-            {
-                "ids": doi,
-                "format": "json",
-                "tool": "paperfetch",
-                "email": mailto,
-            }
-        )
+        idconv: dict[str, str] = {
+            "ids": doi,
+            "format": "json",
+            "tool": "paperfetch",
+            "email": mailto,
+        }
+        ncbi_key = (os.environ.get("NCBI_API_KEY") or "").strip()
+        if ncbi_key:
+            idconv["api_key"] = ncbi_key
+        params = urllib.parse.urlencode(idconv)
         idconv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?{params}"
         raw = fetch_bytes(idconv_url, mailto)
         try:
@@ -190,8 +195,66 @@ def resolve(doi: str, mailto: str) -> bool:
         except Exception:
             pass
 
+        # Step D: BioC JSON (OA subset + author manuscripts). NCBI's
+        # HTML page is often a JS shell; BioC is the text-mining copy.
+        try:
+            bioc_url = BIOC_URL.format(id=urllib.parse.quote(pmcid))
+            bioc_raw = fetch_bytes(bioc_url, mailto)
+            bioc_data = json.loads(bioc_raw.decode("utf-8"))
+            text = bioc_text(bioc_data)
+            n = len(text.strip())
+            if n >= TEXT_FLOOR:
+                dest_txt.parent.mkdir(parents=True, exist_ok=True)
+                dest_txt.write_text(text, encoding="utf-8")
+                write_meta(
+                    doi,
+                    {
+                        "title": title,
+                        "resolver": "uspmc",
+                        "journal": journal,
+                        "year": year,
+                        "text_chars": n,
+                        "pmcid": pmcid,
+                        "version": "authorManuscript",
+                    },
+                )
+                return True
+        except Exception:
+            pass
+
         _cleanup()
         return False
     except Exception:
         _cleanup()
         return False
+
+
+def bioc_text(data: object) -> str:
+    """Join BioC passage text, skipping references and chrome."""
+    chunks: list[str] = []
+    for passage in _bioc_passages(data):
+        inf = passage.get("infons") or passage.get("infon") or {}
+        if not isinstance(inf, dict):
+            inf = {}
+        sec = str(inf.get("section_type") or inf.get("type") or "")
+        if _BIOC_SKIP.search(sec):
+            continue
+        t = passage.get("text")
+        if isinstance(t, str) and t.strip():
+            chunks.append(t.strip())
+    return "\n\n".join(chunks)
+
+
+def _bioc_passages(obj: object):
+    if isinstance(obj, dict):
+        passages = obj.get("passages")
+        if isinstance(passages, list):
+            for p in passages:
+                if isinstance(p, dict):
+                    yield p
+            return
+        for v in obj.values():
+            yield from _bioc_passages(v)
+    elif isinstance(obj, list):
+        for x in obj:
+            yield from _bioc_passages(x)

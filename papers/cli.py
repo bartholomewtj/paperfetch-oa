@@ -26,8 +26,11 @@ from papers.crossref import resolve_title as crossref_resolve_title
 from papers.europepmc import resolve as europepmc_resolve
 from papers.extract import write_text
 from papers.fetch import FetchError, download_pdf
+from papers.landing import download_from_landing, is_publisher_url
 from papers.openalex import resolve as openalex_resolve
+from papers.openaire import resolve as openaire_resolve
 from papers.preprints import resolve as preprint_resolve, shortcut_urls
+from papers.related import resolve as related_resolve
 from papers.semanticscholar import resolve as s2_resolve
 from papers.unpaywall import LookupError, lookup
 from papers.uspmc import resolve as uspmc_resolve
@@ -169,6 +172,7 @@ def get_paper(raw: str) -> tuple[dict, int]:
     locations = list(result.locations) if result else []
     if result and result.pdf_url and not locations:
         locations = [(result.pdf_url, result.license, result.version)]
+    browser_urls: list[str] = []
 
     def _drop_unpaywall() -> None:
         for p in (pdf, txt, meta_path(doi)):
@@ -182,6 +186,8 @@ def get_paper(raw: str) -> tuple[dict, int]:
         try:
             download_pdf(url, pdf, mailto)
         except FetchError:
+            if is_publisher_url(url) and url not in browser_urls:
+                browser_urls.append(url)
             _drop_unpaywall()
             continue
         n = write_text(pdf, txt)
@@ -203,6 +209,31 @@ def get_paper(raw: str) -> tuple[dict, int]:
         # OpenAlex / S2 / CORE). A scan should not hide a later readable copy.
         _drop_unpaywall()
         continue
+    if result and result.landings:
+        for land in result.landings:
+            try:
+                if not download_from_landing(land, pdf, mailto):
+                    _drop_unpaywall()
+                    continue
+            except Exception:
+                _drop_unpaywall()
+                continue
+            n = write_text(pdf, txt)
+            write_meta(
+                doi,
+                {
+                    "title": title,
+                    "resolver": "unpaywall",
+                    "version": None,
+                    "license": None,
+                    "journal": result.journal,
+                    "year": result.year,
+                    "text_chars": n,
+                },
+            )
+            if n >= TEXT_FLOOR:
+                return _ok_record(doi, read_meta(doi), n), 0
+            _drop_unpaywall()
     if not unpaywall_error:
         tried.append("unpaywall_blocked" if locations else "unpaywall")
 
@@ -227,7 +258,6 @@ def get_paper(raw: str) -> tuple[dict, int]:
         return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
     if pr_res == "unreadable":
         return _unreadable_record(doi, text_chars(doi), (read_meta(doi).get("title") or title)), 2
-    browser_urls: list[str] = []
     if pr_res in ("miss", False, "blocked"):
         tried.append("preprint")
         if pr_res == "blocked":
@@ -242,6 +272,22 @@ def get_paper(raw: str) -> tuple[dict, int]:
         return _unreadable_record(doi, text_chars(doi), (read_meta(doi).get("title") or title)), 2
     if core_res in ("miss", False):
         tried.append("core")
+
+    rel_res = related_resolve(doi, mailto)
+    if rel_res in ("hit", True):
+        return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
+    if rel_res == "unreadable":
+        return _unreadable_record(doi, text_chars(doi), (read_meta(doi).get("title") or title)), 2
+    if rel_res in ("miss", False):
+        tried.append("related")
+
+    oa_open = openaire_resolve(doi, mailto)
+    if oa_open in ("hit", True):
+        return _ok_record(doi, read_meta(doi), text_chars(doi)), 0
+    if oa_open == "unreadable":
+        return _unreadable_record(doi, text_chars(doi), (read_meta(doi).get("title") or title)), 2
+    if oa_open in ("miss", False):
+        tried.append("openaire")
 
     if unpaywall_error:
         # Unpaywall was unreachable, so we don't know if this is OA.
@@ -303,6 +349,7 @@ def status_report() -> dict:
         "mailto_set": mailto_set,
         "s2_key_set": s2_key_set,
         "core_key_set": bool((os.environ.get("CORE_API_KEY") or "").strip()),
+        "ncbi_key_set": bool((os.environ.get("NCBI_API_KEY") or "").strip()),
     }
 
 

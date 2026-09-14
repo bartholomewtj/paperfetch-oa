@@ -67,11 +67,22 @@ def resolve(doi: str, mailto: str) -> str | None:
         return "miss"
 
     oa_pdf = data.get("openAccessPdf")
-    if not isinstance(oa_pdf, dict):
-        return "miss"
+    pdf_url = None
+    license_val = None
+    if isinstance(oa_pdf, dict):
+        status = str(oa_pdf.get("status") or "").strip().upper()
+        raw_url = oa_pdf.get("url")
+        if status != "CLOSED" and isinstance(raw_url, str) and raw_url.startswith("http"):
+            pdf_url = raw_url
+            license_val = oa_pdf.get("license") or None
 
-    pdf_url = oa_pdf.get("url")
-    if not pdf_url or not isinstance(pdf_url, str):
+    if not pdf_url:
+        ext = data.get("externalIds") if isinstance(data.get("externalIds"), dict) else {}
+        arxiv_id = ext.get("ArXiv") if isinstance(ext, dict) else None
+        if isinstance(arxiv_id, str) and arxiv_id.strip():
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id.strip()}.pdf"
+
+    if not pdf_url:
         return "miss"
 
     dest_pdf = pdf_path(doi)
@@ -96,8 +107,6 @@ def resolve(doi: str, mailto: str) -> str | None:
         n = write_text(dest_pdf, dest_txt)
         raw_title = data.get("title")
         title = raw_title if isinstance(raw_title, str) else ""
-        license_val = oa_pdf.get("license") or None
-
         write_meta(
             doi,
             {

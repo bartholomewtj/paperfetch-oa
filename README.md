@@ -52,7 +52,9 @@ papers get 10.1371/journal.pone.0000308 10.1001/jamapsychiatry.2018.1776
 papers get - < dois.txt
 ```
 
-A title is resolved through Crossref first (`resolved title -> {doi}` on stderr). Prefer a DOI when you have one — titles are fuzzy. Title lookup skips preprints and reviewer reports, and prefers a journal article.
+A title is resolved through Crossref first (`resolved title -> {doi}` on stderr). Lookup requires an exact (normalised) title match; no match returns `{status: "no_doi"}` and exit 1. Prefer a DOI when you have one. Title lookup skips preprints and reviewer reports.
+
+ChemRxiv and preprints.org often 403 the script user-agent. Those URLs still land in `browser_urls` on a `no_oa` record so a real browser can try them.
 
 `papers get` prints one JSON object per input, in input order. Exit code is 0 when every line is `ok`. One input that is not `ok` exits 1 (`no_doi`, `config_error`) or 2 (the rest). A batch of mixed results exits 2.
 
@@ -84,7 +86,7 @@ papers status
 
 1. **Identify.** A `10.…` token is a DOI. Anything else goes to Crossref. Missing `PAPERS_MAILTO` is `config_error`.
 2. **Cache.** Hits live under `~/.paperfetch` (Windows: `%USERPROFILE%\.paperfetch`). A readable `text.txt` already there is returned as `ok` with no download.
-3. **OA ladder.** First readable copy wins: Europe PMC → US PMC → bioRxiv / medRxiv → Unpaywall → OpenAlex → Semantic Scholar → preprint URL shortcuts → CORE (only with a key).
+3. **OA ladder.** First readable copy wins: Europe PMC → US PMC → bioRxiv / medRxiv → Unpaywall (PDFs, then repository landing pages) → OpenAlex → Semantic Scholar (including an arXiv id on the same record) → preprint URL shortcuts → Crossref `has-preprint` → CORE (only with a key) → OpenAIRE.
 4. **Extract.** PyMuPDF turns the PDF into `text.txt`. Europe PMC XML and PMC HTML write the same shape.
 5. **Return.** JSON on stdout. Files stay in the cache for the next run.
 

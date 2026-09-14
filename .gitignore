@@ -19,3 +19,8 @@ uv.lock
 
 # Archify visual-check captures stay local
 /docs/pipeline.visual-check.*
+
+# Pickup snapshot; leftover NEXT-SESSION/ROADMAP must not be committed.
+/STATE.md
+/NEXT-SESSION.md
+/ROADMAP.md
